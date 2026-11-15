@@ -121,3 +121,4 @@ Until Riya's `fraud_features.py` is merged (due Wed 18 noon), use a tiny local s
 - [ ] Drift check, retrain, activate work and are audit-logged (via backend)
 - [ ] Latency report with real numbers; load test results recorded
 - [ ] Demo script rehearsed twice; backup video recorded; `main` tagged `demo-ready` on Thu 26 Nov
+
