@@ -1,0 +1,23 @@
+# secrets
+.env
+*.pem
+# node
+node_modules/
+dist/
+build/
+coverage/
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+# data and models (share via Kaggle/Drive, never Git)
+data-science/datasets/*.csv
+ml-service/model_store/*
+!ml-service/model_store/.gitkeep
+# misc
+*.log
+.DS_Store
+pgdata/
+spark-checkpoints/
