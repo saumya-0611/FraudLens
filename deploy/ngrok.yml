@@ -1,0 +1,19 @@
+# FraudLens Ngrok configuration (v3 syntax)
+# Usage:
+#   1) Expose the live FraudLens stack (Frontend + Vite-proxied Backend API & WebSockets):
+#        ngrok http 5173
+#   2) Expose local Jenkins for GitHub Webhooks:
+#        ngrok http 8080
+#   3) Or run both tunnels using this config:
+#        ngrok start --config deploy/ngrok.yml --all
+
+version: "2"
+tunnels:
+  fraudlens-app:
+    proto: http
+    addr: 5173
+    inspect: true
+  jenkins-webhook:
+    proto: http
+    addr: 8080
+    inspect: false

@@ -1,0 +1,61 @@
+// FraudLens Pre-Flight Gatekeeper Pipeline (adapted from BhashaFlow CI/CD workflow)
+// Uses offset host ports (Frontend: 6173, Backend: 6000) and isolated project name (fraudlens_ci)
+// so Jenkins builds never collide with a developer's local stack on 5173/5000.
+
+pipeline {
+    agent any
+
+    environment {
+        COMPOSE_PROJECT_NAME = 'fraudlens_ci'
+        FRONTEND_HOST_PORT   = '6173'
+        BACKEND_HOST_PORT    = '6000'
+    }
+
+    stages {
+        stage('1. Environment & Contract Sanity') {
+            steps {
+                sh '''
+                    test -f docs/CONTRACTS.md
+                    test -f database/init.sql
+                    test -f shared/thresholds.json
+                    if [ ! -f .env ]; then cp .env.example .env; fi
+                    docker compose config --quiet
+                '''
+            }
+        }
+
+        stage('2. Backend Unit Tests') {
+            steps {
+                dir('backend') {
+                    sh 'npm ci && npm test'
+                }
+            }
+        }
+
+        stage('3. ML Service & Feature Parity Tests') {
+            steps {
+                sh '''
+                    docker build -f ml-service/Dockerfile -t fraudlens-ml-ci .
+                    docker run --rm fraudlens-ml-ci pytest -v tests/
+                '''
+            }
+        }
+
+        stage('4. Docker Pre-Flight Build & Health Gate') {
+            steps {
+                sh '''
+                    docker compose -p ${COMPOSE_PROJECT_NAME} up --build -d postgres kafka kafka-init ml-service backend
+                    sleep 12
+                    curl -fsS http://localhost:${BACKEND_HOST_PORT}/health
+                    docker compose -p ${COMPOSE_PROJECT_NAME} exec -T ml-service curl -fsS -I http://localhost:8000/health
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker compose -p ${COMPOSE_PROJECT_NAME} down -v --remove-orphans || true'
+        }
+    }
+}
