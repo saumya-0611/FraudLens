@@ -5,12 +5,11 @@ Reads JSON messages from `transactions-raw` in micro-batches (every 1 second or 
 and calls `pipeline.process_batch(pdf, batch_id)`. Also updates the `streaming` heartbeat every 5s
 even when idle so the dashboard status indicator stays green.
 """
+import importlib
 import json
 import os
-import time
 from typing import Any, Dict, List
 
-from kafka import KafkaConsumer
 import pandas as pd
 
 from streaming.jobs.pipeline import process_batch
@@ -22,8 +21,9 @@ COLUMNS = [
 
 
 def run_consumer() -> None:
+    kafka_mod = importlib.import_module("kafka")
     brokers = os.getenv("KAFKA_BROKERS", "kafka:9092").split(",")
-    consumer = KafkaConsumer(
+    consumer = kafka_mod.KafkaConsumer(
         "transactions-raw",
         bootstrap_servers=brokers,
         group_id="fraudlens-streaming-group",

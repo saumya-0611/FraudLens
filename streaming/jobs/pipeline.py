@@ -7,6 +7,7 @@ Independent of Spark so it can be called from either:
   - Unit tests with a pandas DataFrame
 """
 from datetime import datetime, timezone
+import importlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,6 @@ import time
 from typing import Any, Dict, List, Tuple
 
 import httpx
-from kafka import KafkaProducer
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
@@ -24,15 +24,16 @@ from shared.fraud_features import FEATURE_COLUMNS, build_features
 REQUIRED_FIELDS = ("transaction_id", "account_ref", "amount", "tx_time", "category", "ingested_at")
 THRESHOLDS_PATH = Path(__file__).resolve().parents[2] / "shared" / "thresholds.json"
 
-_producer: KafkaProducer | None = None
+_producer: Any = None
 
 
-def get_kafka_producer() -> KafkaProducer:
+def get_kafka_producer() -> Any:
     """Lazy singleton Kafka producer for fraud-alerts and transactions-dlq."""
     global _producer
     if _producer is None:
+        kafka_mod = importlib.import_module("kafka")
         brokers = os.getenv("KAFKA_BROKERS", "kafka:9092").split(",")
-        _producer = KafkaProducer(
+        _producer = kafka_mod.KafkaProducer(
             bootstrap_servers=brokers,
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
             key_serializer=lambda k: k.encode("utf-8") if k else None,

@@ -6,6 +6,7 @@ and delegates each micro-batch DataFrame to `pipeline.process_batch(df.toPandas(
 If STREAM_ENGINE=fallback (or if Java/Spark runtime is unavailable), cleanly delegates to
 `consumer_fallback.run_consumer()` which executes the exact same `process_batch` function.
 """
+import importlib
 import os
 
 from streaming.jobs.consumer_fallback import run_consumer
@@ -13,15 +14,18 @@ from streaming.jobs.pipeline import process_batch
 
 
 def run_spark_stream() -> None:
-    from pyspark.sql import SparkSession
-    from pyspark.sql.functions import col, from_json
-    from pyspark.sql.types import (
-        DoubleType,
-        IntegerType,
-        StringType,
-        StructField,
-        StructType,
-    )
+    pyspark_sql = importlib.import_module("pyspark.sql")
+    pyspark_fn = importlib.import_module("pyspark.sql.functions")
+    pyspark_types = importlib.import_module("pyspark.sql.types")
+
+    SparkSession = pyspark_sql.SparkSession
+    col = pyspark_fn.col
+    from_json = pyspark_fn.from_json
+    DoubleType = pyspark_types.DoubleType
+    IntegerType = pyspark_types.IntegerType
+    StringType = pyspark_types.StringType
+    StructField = pyspark_types.StructField
+    StructType = pyspark_types.StructType
 
     brokers = os.getenv("KAFKA_BROKERS", "kafka:9092")
     checkpoint_dir = os.getenv("SPARK_CHECKPOINT_DIR", "/tmp/spark-checkpoints")
