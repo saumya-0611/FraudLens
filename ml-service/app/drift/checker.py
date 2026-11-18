@@ -7,8 +7,10 @@ and each of the 13 features against the active model's `reference_stats.json` (u
 classifies status (<0.10 OK, 0.10-0.25 WARNING, >0.25 DRIFT), and stores the row in `drift_reports`.
 """
 from datetime import datetime, timezone
+import importlib.util
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -20,13 +22,33 @@ from app.registry.model_registry import _read_local_registry, _write_local_regis
 from shared.fraud_features import FEATURE_COLUMNS
 
 
+def _load_ds_bin_and_psi():
+    """Load bin_and_psi from data-science/drift/psi.py (either repo path or container copy)."""
+    candidates = [
+        Path(__file__).resolve().parents[3] / "data-science" / "drift" / "psi.py",
+        Path(__file__).resolve().parents[2] / "data_science_drift" / "psi.py",
+    ]
+    for path in candidates:
+        if path.exists():
+            spec = importlib.util.spec_from_file_location("ds_psi", path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return getattr(mod, "bin_and_psi", None)
+    return None
+
+
+_DS_BIN_AND_PSI = _load_ds_bin_and_psi()
+
+
 def compute_psi_from_reference(actual_values: np.ndarray, ref_entry: Dict[str, List[float]]) -> float:
     """
-    Compute Population Stability Index (PSI):
-        PSI = sum( (actual_prop - expected_prop) * ln(actual_prop / expected_prop) )
-    Outer bin edges are extended to (-inf, +inf) so drifted values (e.g. 3x amounts in --drift-mode)
-    fall into the extreme bins rather than being dropped.
+    Compute Population Stability Index (PSI) using `data-science/drift/psi.py` (`bin_and_psi`).
     """
+    edges = ref_entry.get("bin_edges", [0.0, 1.0])
+    expected = ref_entry.get("proportions", [1.0])
+    if _DS_BIN_AND_PSI is not None:
+        return round(float(_DS_BIN_AND_PSI(edges, expected, actual_values)), 4)
     edges = np.asarray(ref_entry.get("bin_edges", [0.0, 1.0]), dtype="float64").copy()
     expected = np.asarray(ref_entry.get("proportions", [1.0]), dtype="float64").copy()
 

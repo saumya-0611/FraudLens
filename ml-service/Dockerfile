@@ -17,8 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY ml-service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared feature module and ml-service application code
+# Copy shared feature module, data-science PSI module, and ml-service application code
 COPY shared ./shared
+COPY data-science/drift ./data_science_drift
 COPY ml-service/app ./app
 COPY ml-service/training ./training
 COPY ml-service/tests ./tests
