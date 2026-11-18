@@ -14,8 +14,6 @@ const modelsRoutes = require('./routes/models.routes');
 const app = express();
 
 app.use(helmet());
-app.use(express.json({ limit: '100kb' }));
-app.use(cookieParser());
 
 // Give every request an id; it is returned in error bodies so problems can be traced.
 app.use((req, res, next) => {
@@ -23,6 +21,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-Id', req.id);
   next();
 });
+
+app.use(express.json({ limit: '100kb' }));
+app.use(cookieParser());
 
 // Health check (no /api prefix, public).
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
