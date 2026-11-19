@@ -97,7 +97,7 @@ Until Riya's `fraud_features.py` is merged (due Wed 18 noon), use a tiny local s
 
 **T4.2 CI** `.github/workflows/ci.yml` **[OFFLOAD to Shivansh for the security step]**: on push/PR: backend `npm ci && npm test`, frontend `npm ci && npm run build`, ml-service `pytest`, `docker compose build`. Keep it simple.
 
-**T4.3 Minikube (STRETCH, only if everything above is done and stable)**: `deploy/k8s/*.yaml` that run the same images (Deployment + Service per component, Secrets example). If you cannot test it on Minikube, present it as "manifests prepared", not as "deployed". Do not claim what you did not run.
+**T4.3 Minikube `[OFFLOADED TO SHIVANSH]`**: `deploy/k8s/*.yaml` that run the same images (Deployment + Service per component, Kubernetes Secrets example, and NetworkPolicy for internal service isolation). Handled by Shivansh in `tasks/SHIVANSH_CYBER.md` (C14). If not tested live on Minikube, present it as "manifests prepared", not as "deployed".
 
 **T4.4 `docs/demo-script.md`** (5-7 minute scripted demo, see below) and a one-page "how to run" in `README.md`.
 

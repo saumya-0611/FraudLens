@@ -15,7 +15,7 @@ The only reason this works is that all of us follow the same rules and the same 
 | Team Lead | AI/ML + DevOps + Big Data (streaming, DB, simulator) | `tasks/LEAD_AIML_DEVOPS_STREAMING.md` |
 | Riya | Backend (non-security routes, Kafka, WebSocket) + Data Science | `tasks/RIYA_BACKEND_DS.md` |
 | Amrita | Frontend (React) | `tasks/AMRITA_FRONTEND.md` |
-| Shivansh | Cyber Security (auth, RBAC, audit, attack tests) | `tasks/SHIVANSH_CYBER.md` |
+| Shivansh | Cyber Security (auth, RBAC, audit, attack tests, K8s security manifests) | `tasks/SHIVANSH_CYBER.md` |
 
 **Everything about APIs, database tables, Kafka messages, features and ports is in `docs/CONTRACTS.md`.** That file is the law.
 
@@ -77,8 +77,8 @@ fraudLens/
 ├── database/                        [Lead]  init.sql
 ├── simulator/                       [Lead]  replay.py, load_test.py
 ├── security/                        [Shivansh]  threat-model.md, attack_tests/, security notes
-├── deploy/k8s/                      [Lead]  stretch goal (Minikube)
-└── .github/workflows/               [Lead]  ci.yml   (Shivansh adds the security scan step)
+├── deploy/k8s/                      [Shivansh]  K8s Deployments, Services, Secrets & NetworkPolicy (Minikube)
+└── .github/workflows/               [Lead + Shivansh]  ci.yml + security-scan.yml
 ```
 
 To create all folders and the stub files at once, the lead runs `bash scaffold.sh` in the repo root. It never overwrites existing files.

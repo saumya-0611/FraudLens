@@ -7,7 +7,7 @@
 
 > You are my pair-programmer on the FraudLens capstone (presentation 27 Nov 2026). Read `docs/CONTRACTS.md` and this task file completely before writing code.
 > I own ONLY these files: `backend/src/middleware/`, `backend/src/validation/`, `backend/src/audit/`, `backend/src/utils/jwt.js`, `backend/src/utils/mask.js` (review only; already implemented),
-> `backend/scripts/seed.js`, `backend/scripts/verify_audit_chain.js`, `backend/src/routes/auth.routes.js`, `users.routes.js`, `audit.routes.js`, `security/`, and the security step in `.github/workflows/`.
+> `backend/scripts/seed.js`, `backend/scripts/verify_audit_chain.js`, `backend/src/routes/auth.routes.js`, `users.routes.js`, `audit.routes.js`, `security/`, `deploy/k8s/`, and the security step in `.github/workflows/`.
 > Do not edit other files. Never change CONTRACTS.md; if something looks wrong, stop and tell me.
 > Backend is Node.js + Express (CommonJS). Use `bcryptjs` (pure-JS bcrypt), `jsonwebtoken`, `zod`, `helmet`, `express-rate-limit`, `cookie-parser`, `pg`.
 > The skeleton contains STUB versions of my modules with the final export names. I replace the implementation and NEVER change the export names or signatures (see CONTRACTS section 9), because Riya's code already calls them.
@@ -69,10 +69,16 @@ Record results (PASS/FAIL, request, response status) in `docs/test-reports/secur
 
 **C13. Presentation (Wed 25 - Thu 26 Nov).** Prepare a 2-minute live security demo: failed login lockout, tampered token rejected, VIEWER blocked from an admin API, audit chain verifier catching a modified row.
 
+**C14. Kubernetes & Zero-Trust Network Manifests (Tue 24 - Wed 25 Nov, offloaded from Lead T4.3).** Create `deploy/k8s/*.yaml` to run the FraudLens images on Minikube/Kubernetes:
+- `deploy/k8s/secrets.example.yaml`: Kubernetes `Secret` template mirroring `.env.example` (`JWT_SECRET`, `SERVICE_TOKEN`, `INTERNAL_ML_TOKEN`, `POSTGRES_PASSWORD`, etc. — never commit real secrets).
+- `deploy/k8s/deployments-services.yaml`: `Deployment` + `Service` manifests for `postgres`, `kafka`, `ml-service`, `streaming`, `backend`, and `frontend` (only `frontend` [5173] and `backend` [5000] exposed as `NodePort`/`LoadBalancer`; all others `ClusterIP` only).
+- `deploy/k8s/network-policy.yaml`: Zero-Trust Kubernetes `NetworkPolicy` restricting ingress to `ml-service:8000` (only from `backend` and `streaming` pods) and `postgres:5432` (only from `backend`, `streaming`, and `ml-service` pods).
+- Add a brief `deploy/k8s/README.md` with `kubectl apply -f deploy/k8s/` and `kubectl apply --dry-run=client` verification commands. (If not deployed live on Minikube during the presentation, present honestly as "Kubernetes & Zero-Trust manifests prepared".)
+
 ---
 
 ## Order of days
-Mon 16: C1, C2. Tue 17: C3, C4, start C5. Wed 18: C5 (to Riya), C6, C7 (**swap stubs on your branch; M1**). Thu 19: C8. Fri 20: C9. Fri-Sat: C10, C11. Sun-Tue: C12. Wed-Thu: C13.
+Mon 16: C1, C2. Tue 17: C3, C4, start C5. Wed 18: C5 (to Riya), C6, C7 (**swap stubs on your branch; M1**). Thu 19: C8. Fri 20: C9. Fri-Sat: C10, C11. Sun-Tue: C12, C14. Wed-Thu: C13.
 
 ## Acceptance checklist
 - [ ] All stubs replaced; export names and signatures unchanged
@@ -81,4 +87,5 @@ Mon 16: C1, C2. Tue 17: C3, C4, start C5. Wed 18: C5 (to Riya), C6, C7 (**swap s
 - [ ] Hash-chained audit log + verifier; writes never crash a request
 - [ ] No API returns `account_ref`; no secrets in Git
 - [ ] `security/threat-model.md`, `docs/test-reports/security-report.md` with evidence, CI security scan
+- [ ] `deploy/k8s/*.yaml` (Deployments, Services, Secrets example, Zero-Trust NetworkPolicy) prepared and syntax-validated
 - [ ] PR checklist from `TEAMMATE.md` completed for every PR
