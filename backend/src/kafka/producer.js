@@ -1,4 +1,4 @@
-﻿const { Kafka } = require('kafkajs');
+const { Kafka } = require('kafkajs');
 const env = require('../config/env');
 
 const kafka = new Kafka({
@@ -55,7 +55,12 @@ async function disconnectProducer() {
   }
 }
 
+function isProducerConnected() {
+  return connected;
+}
+
 module.exports = {
   publishTransaction,
   disconnectProducer,
+  isProducerConnected,
 };
