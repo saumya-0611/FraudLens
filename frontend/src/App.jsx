@@ -1,8 +1,9 @@
-
 import { useState } from 'react'
+import { Routes, Route, Outlet } from 'react-router-dom'
+import DashboardLayout from './layouts/DashboardLayout'
 import './App.css'
 
-function App() {
+function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -228,6 +229,89 @@ function App() {
         </div>
       </section>
     </main>
+  )
+}
+
+// Temporary page content until the actual dashboard pages are built.
+function PreviewPage({ title, description }) {
+  return (
+    <div className="preview-page">
+      <span className="form-kicker">FRAUD LENS WORKSPACE</span>
+      <h1>{title}</h1>
+      <p>{description}</p>
+    </div>
+  )
+}
+
+function App() {
+  return (
+    <Routes>
+      {/* Login page */}
+      <Route path="/" element={<LoginPage />} />
+
+      {/* Dashboard pages share the same layout */}
+      <Route element={<DashboardLayout />}>
+        <Route
+          path="/dashboard"
+          element={
+            <PreviewPage
+              title="Overview"
+              description="Your real-time fraud monitoring dashboard will appear here."
+            />
+          }
+        />
+
+        <Route
+          path="/transactions"
+          element={
+            <PreviewPage
+              title="Transactions"
+              description="Transaction monitoring will appear here."
+            />
+          }
+        />
+
+        <Route
+          path="/alerts"
+          element={
+            <PreviewPage
+              title="Fraud Alerts"
+              description="Fraud alerts will appear here."
+            />
+          }
+        />
+
+        <Route
+          path="/admin/users"
+          element={
+            <PreviewPage
+              title="User Management"
+              description="Administrator user management will appear here."
+            />
+          }
+        />
+
+        <Route
+          path="/admin/audit-logs"
+          element={
+            <PreviewPage
+              title="Audit Logs"
+              description="Audit activity will appear here."
+            />
+          }
+        />
+
+        <Route
+          path="/admin/models"
+          element={
+            <PreviewPage
+              title="Model Management"
+              description="Model monitoring and management will appear here."
+            />
+          }
+        />
+      </Route>
+    </Routes>
   )
 }
 
