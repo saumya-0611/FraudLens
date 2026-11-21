@@ -1,4 +1,4 @@
-﻿jest.mock('../config/db', () => ({
+jest.mock('../config/db', () => ({
   query: jest.fn(),
 }));
 
@@ -69,6 +69,7 @@ describe('Alerts Route Tests', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.state).toBe('UNDER_REVIEW');
+    expect(response.body).not.toHaveProperty('account_ref');
     expect(query).toHaveBeenCalledTimes(2);
   });
 
@@ -98,6 +99,7 @@ describe('Alerts Route Tests', () => {
     expect(response.status).toBe(200);
     expect(response.body.state).toBe('RESOLVED');
     expect(response.body.resolution).toBe('CONFIRMED_FRAUD');
+    expect(response.body).not.toHaveProperty('account_ref');
   });
 
   test('PATCH /api/alerts/:id rejects an already resolved alert', async () => {
@@ -114,5 +116,34 @@ describe('Alerts Route Tests', () => {
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe('CONFLICT');
     expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  test('PATCH /api/alerts/:id response never leaks raw account_ref (B7 regression)', async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [{ alert_id: 2, state: 'NEW' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          alert_id: 2,
+          transaction_id: 'tx-alert-002',
+          risk_score: 0.88,
+          state: 'UNDER_REVIEW',
+          resolution: null,
+          resolved_by: null,
+          created_at: '2026-11-21T11:00:00.000Z',
+          updated_at: '2026-11-21T11:05:00.000Z',
+        }],
+      });
+
+    const response = await request(app)
+      .patch('/api/alerts/2')
+      .send({ state: 'UNDER_REVIEW' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).not.toHaveProperty('account_ref');
+    expect(JSON.stringify(response.body)).not.toContain('account_ref');
+    expect(response.body.alert_id).toBe(2);
+    expect(response.body.state).toBe('UNDER_REVIEW');
   });
 });

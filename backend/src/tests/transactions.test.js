@@ -35,6 +35,8 @@ describe('Transaction Route Tests', () => {
       transaction_id: 'tx-test-001',
       status: 'ACCEPTED',
     });
+    expect(response.body).not.toHaveProperty('account_ref');
+    expect(JSON.stringify(response.body)).not.toContain('account-123456');
 
     expect(publishTransaction).toHaveBeenCalledWith(transaction);
   });
