@@ -2,6 +2,7 @@
 
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const { audit } = require('../audit/auditLogger');
 const { query } = require('../config/db');
 const { asyncHandler, AppError } = require('../utils/errors');
 const { maskAccount } = require('../utils/mask');
@@ -151,6 +152,11 @@ router.patch(
       throw new AppError(409, 'CONFLICT', 'Invalid alert state transition.');
     }
 
+    const resolvedByUserId =
+      state === 'RESOLVED' && Number.isInteger(req.user?.id) && req.user.id > 0
+        ? req.user.id
+        : null;
+
     const result = await query(
       `UPDATE alerts
        SET state = $1,
@@ -164,13 +170,27 @@ router.patch(
       [
         state,
         state === 'RESOLVED' ? resolution : null,
-        state === 'RESOLVED' ? req.user.id : null,
+        resolvedByUserId,
         req.params.id,
       ]
     );
 
     if (result.rows.length === 0) {
       throw new AppError(409, 'CONFLICT', 'Alert was already resolved.');
+    }
+
+    try {
+      await audit({
+        req,
+        userId: req.user?.id,
+        username: req.user?.username || 'system',
+        action: 'ALERT_STATE_CHANGED',
+        entity: 'alert',
+        entityId: String(req.params.id),
+        details: { state, resolution: state === 'RESOLVED' ? resolution : null },
+      });
+    } catch (auditErr) {
+      console.error('[AlertsRoute] Audit log failed:', auditErr.message);
     }
 
     res.json(result.rows[0]);

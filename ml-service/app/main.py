@@ -124,7 +124,7 @@ def activate_model(version: str) -> Dict[str, Any]:
         # Verify SHA-256 and load into memory first before flipping DB status
         predictor.load_version(version, target["sha256"])
         updated = set_active_version(version)
-    except RuntimeError as exc:
+    except (RuntimeError, FileNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return {
