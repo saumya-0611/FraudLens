@@ -7,7 +7,7 @@ const seeds = [
   ['viewer', 'VIEWER', 'SEED_VIEWER_PASSWORD'],
 ];
 
-async function main() {
+async function seedUsers() {
   const { rows } = await pool.query(
     'SELECT username FROM users WHERE username = ANY($1)',
     [seeds.map(([username]) => username)]
@@ -35,12 +35,22 @@ async function main() {
       [username, hash, role]
     );
   }
-  console.log('[seed] Finished. Existing accounts were skipped.');
 }
 
-main()
-  .catch((error) => {
-    console.error('[seed] Failed:', error.message);
+async function main() {
+  try {
+    await seedUsers();
+    console.log('[seed] Finished. Existing accounts were skipped.');
+  } finally {
+    await pool.end();
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('[seed] Failed:', error.code || error.message);
     process.exitCode = 1;
-  })
-  .finally(() => pool.end());
+  });
+}
+
+module.exports = { main };

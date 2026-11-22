@@ -5,6 +5,14 @@ const crypto = require('crypto');
 const { pool } = require('../config/db');
 
 const GENESIS_HASH = '0'.repeat(64);
+const confidentialKeys = new Set([
+  'password', 'passwordhash', 'authorization', 'cookie', 'setcookie', 'fltoken', 'jwt',
+  'token', 'servicetoken', 'xservicetoken', 'internalmltoken', 'xinternaltoken', 'accountref',
+]);
+
+function omitConfidentialFields(key, value) {
+  return confidentialKeys.has(key.toLowerCase().replace(/[^a-z]/g, '')) ? undefined : value;
+}
 
 // JSONB can reorder object keys. Use the same ordering before hashing and after reading.
 function canonicalJson(value) {
@@ -53,7 +61,7 @@ async function audit(entry = {}) {
     const username = entry.username || entry.req?.user?.username || 'system';
     const entity = entry.entity || null;
     const entityId = entry.entityId != null ? String(entry.entityId) : null;
-    const detailsJson = JSON.stringify(entry.details ?? {});
+    const detailsJson = JSON.stringify(entry.details ?? {}, omitConfidentialFields);
     const ip = entry.req?.ip || entry.req?.socket?.remoteAddress || null;
 
     const entryHash = computeEntryHash(
@@ -88,11 +96,12 @@ async function audit(entry = {}) {
     if (client) {
       try {
         await client.query('ROLLBACK');
-      } catch {
-        // ignore rollback error
+      } catch (rollbackError) {
+        client.release(rollbackError);
+        client = null;
       }
     }
-    console.error('[AUDIT]', action, err.message);
+    console.error('[AUDIT] Write failed:', action, err.code || err.name);
   } finally {
     if (client) client.release();
   }

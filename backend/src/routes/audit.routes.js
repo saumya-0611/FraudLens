@@ -2,6 +2,8 @@
 const router = require('express').Router();
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const validate = require('../middleware/validate');
+const { auditQuery } = require('../validation/schemas');
 const { query } = require('../config/db');
 const { asyncHandler } = require('../utils/errors');
 
@@ -10,11 +12,12 @@ router.get(
   '/',
   authenticate,
   authorize('ADMIN'),
+  validate(auditQuery),
   asyncHandler(async (req, res) => {
     const { action, username } = req.query;
     const includeHash = req.query.include_hash === 'true';
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.page_size, 10) || 20));
+    const page = Number(req.query.page || 1);
+    const pageSize = Number(req.query.page_size || 20);
 
     const conditions = [];
     const params = [];

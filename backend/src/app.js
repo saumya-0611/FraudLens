@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
+const { denyForeignBrowserWrites, apiLimiter, ingestionLimiter } = require('./middleware/apiHardening');
 
 const authRoutes = require('./routes/auth.routes');           // Shivansh
 const usersRoutes = require('./routes/users.routes');         // Shivansh
@@ -15,6 +16,7 @@ const modelsRoutes = require('./routes/models.routes');
 
 const app = express();
 
+app.disable('x-powered-by');
 app.use(helmet());
 
 // Give every request an id; it is returned in error bodies so problems can be traced.
@@ -24,6 +26,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use('/api', denyForeignBrowserWrites, apiLimiter, ingestionLimiter);
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
@@ -81,9 +84,14 @@ app.use((err, req, res, next) => {
       error: { code: 'VALIDATION_ERROR', message: 'Request body is not valid JSON.', request_id: req.id },
     });
   }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: { code: 'VALIDATION_ERROR', message: 'Request body is too large.', request_id: req.id },
+    });
+  }
   const status = err.status || 500;
   const code = err.code && err.status ? err.code : 'SERVER_ERROR';
-  if (status >= 500) console.error(`[${req.id}]`, err); // full detail only in the server log
+  if (status >= 500) console.error(`[${req.id}] Request failed:`, err.code || err.name);
   res.status(status).json({
     error: {
       code,

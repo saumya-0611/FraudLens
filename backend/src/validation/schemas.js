@@ -4,11 +4,15 @@ const username = z.string().regex(/^[a-zA-Z0-9_.-]{3,50}$/);
 const role = z.enum(['ADMIN', 'ANALYST', 'VIEWER']);
 const status = z.enum(['ACTIVE', 'DISABLED']);
 const password = z.string().min(1).refine((value) => Buffer.byteLength(value) <= 72);
-const newPassword = password.min(10);
+const newPassword = password.min(10).refine((value) => value.trim().length >= 10);
 const id = z.string().regex(/^[1-9]\d{0,9}$/).refine((value) => Number(value) <= 2147483647);
 const page = z.string().regex(/^\d+$/).refine((value) => Number.isSafeInteger(Number(value)) && Number(value) >= 1);
 const dateTime = z.iso.datetime({ offset: true });
 const date = z.union([z.iso.date(), dateTime]);
+const paging = {
+  page: page.optional(),
+  page_size: page.refine((value) => Number(value) <= 100).optional(),
+};
 
 const createTransaction = z.object({
   body: z.strictObject({
@@ -39,12 +43,20 @@ const alertPatch = z.object({
 
 const listQuery = z.object({
   query: z.strictObject({
-    page: page.optional(),
-    page_size: page.refine((value) => Number(value) <= 100).optional(),
+    ...paging,
     risk: z.enum(['PENDING', 'LEGITIMATE', 'SUSPICIOUS', 'HIGH_RISK']).optional(),
     from: date.optional(),
     to: date.optional(),
     q: z.string().max(120).optional(),
+  }),
+});
+
+const auditQuery = z.object({
+  query: z.strictObject({
+    ...paging,
+    action: z.string().regex(/^[A-Z][A-Z0-9_]{0,39}$/).optional(),
+    username: username.optional(),
+    include_hash: z.enum(['true', 'false']).optional(),
   }),
 });
 
@@ -59,4 +71,4 @@ const patchUser = z.object({
   }).refine((value) => Object.keys(value).length > 0),
 });
 
-module.exports = { createTransaction, alertPatch, listQuery, login, createUser, patchUser };
+module.exports = { createTransaction, alertPatch, listQuery, login, createUser, patchUser, auditQuery };
