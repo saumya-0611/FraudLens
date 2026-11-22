@@ -10,9 +10,7 @@
       "risk_score": 0.93,
       "risk_category": "HIGH_RISK",
       "top_reasons": [
-        "Unusual transaction amount",
-        "High transaction velocity",
-        "Unrecognized merchant pattern"
+        { "feature": "amount_ratio", "impact": 0.41, "text": "Amount is 38x this account's usual average" }
       ],
       "model_version": "v1",
       "state": "NEW",
@@ -28,8 +26,7 @@
       "risk_score": 0.68,
       "risk_category": "SUSPICIOUS",
       "top_reasons": [
-        "Unusual spending pattern",
-        "Transaction location mismatch"
+        { "feature": "distance_km", "impact": 0.2, "text": "Transaction location differs from normal activity" }
       ],
       "model_version": "v1",
       "state": "UNDER_REVIEW",
