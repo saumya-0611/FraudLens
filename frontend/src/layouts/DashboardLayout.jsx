@@ -1,5 +1,5 @@
 
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import {
     LayoutDashboard,
@@ -17,9 +17,9 @@ import {
 } from "lucide-react";
 
 import { useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "./DashboardLayout.css";
 
-// Navigation items available to each role.
 const navigation = [
     {
         label: "Overview",
@@ -60,17 +60,26 @@ const navigation = [
 ];
 
 function DashboardLayout() {
-    // Temporary display values until AuthContext is connected in F3.
-    const user = {
-        username: "Demo User",
-        role: "VIEWER",
-    };
+    const { user, logout } = useAuth();
+    const navigate = useNavigate();
 
     const [menuOpen, setMenuOpen] = useState(false);
+    const [logoutError, setLogoutError] = useState("");
 
     const visibleNavigation = navigation.filter((item) =>
-        item.roles.includes(user.role)
+        item.roles.includes(user?.role)
     );
+
+    async function handleLogout() {
+        setLogoutError("");
+
+        try {
+            await logout();
+            navigate("/", { replace: true });
+        } catch {
+            setLogoutError("Unable to sign out. Please try again.");
+        }
+    }
 
     return (
         <div className="dashboard-shell">
@@ -152,22 +161,24 @@ function DashboardLayout() {
                     <button
                         className="sidebar-utility"
                         type="button"
-                        onClick={() => {
-                            // Logout will be connected to the API in F3.
-                        }}
+                        onClick={handleLogout}
                     >
                         <LogOut size={18} />
                         <span>Sign out</span>
                     </button>
 
+                    {logoutError && (
+                        <small role="alert">{logoutError}</small>
+                    )}
+
                     <div className="sidebar-user">
                         <div className="user-avatar">
-                            {user.username.charAt(0).toUpperCase()}
+                            {user?.username?.charAt(0).toUpperCase()}
                         </div>
 
                         <div className="user-details">
-                            <strong>{user.username}</strong>
-                            <small>{user.role}</small>
+                            <strong>{user?.username}</strong>
+                            <small>{user?.role}</small>
                         </div>
 
                         <Activity
@@ -191,7 +202,7 @@ function DashboardLayout() {
                     </div>
 
                     <div className="topbar-profile">
-                        <span className="topbar-role">{user.role}</span>
+                        <span className="topbar-role">{user?.role}</span>
                     </div>
                 </header>
 

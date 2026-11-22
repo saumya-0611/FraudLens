@@ -1,0 +1,15 @@
+
+{
+  "points": [
+    { "minute": "03:00", "total": 82, "flagged": 4 },
+    { "minute": "03:01", "total": 95, "flagged": 6 },
+    { "minute": "03:02", "total": 76, "flagged": 3 },
+    { "minute": "03:03", "total": 110, "flagged": 8 },
+    { "minute": "03:04", "total": 91, "flagged": 5 },
+    { "minute": "03:05", "total": 105, "flagged": 7 },
+    { "minute": "03:06", "total": 88, "flagged": 4 },
+    { "minute": "03:07", "total": 120, "flagged": 9 },
+    { "minute": "03:08", "total": 97, "flagged": 5 },
+    { "minute": "03:09", "total": 115, "flagged": 8 }
+  ]
+}

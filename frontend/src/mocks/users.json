@@ -1,0 +1,26 @@
+
+{
+  "items": [
+    {
+      "id": 1,
+      "username": "admin",
+      "role": "ADMIN",
+      "status": "ACTIVE",
+      "created_at": "2026-11-01T10:00:00Z"
+    },
+    {
+      "id": 2,
+      "username": "analyst",
+      "role": "ANALYST",
+      "status": "ACTIVE",
+      "created_at": "2026-11-02T10:00:00Z"
+    },
+    {
+      "id": 3,
+      "username": "viewer",
+      "role": "VIEWER",
+      "status": "ACTIVE",
+      "created_at": "2026-11-03T10:00:00Z"
+    }
+  ]
+}

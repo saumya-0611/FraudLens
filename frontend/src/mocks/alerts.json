@@ -1,0 +1,43 @@
+
+{
+  "items": [
+    {
+      "alert_id": 17,
+      "transaction_id": "TXN-1001",
+      "account_masked": "XXXX-2095",
+      "amount": 1850.0,
+      "category": "shopping_net",
+      "risk_score": 0.93,
+      "risk_category": "HIGH_RISK",
+      "top_reasons": [
+        "Unusual transaction amount",
+        "High transaction velocity",
+        "Unrecognized merchant pattern"
+      ],
+      "model_version": "v1",
+      "state": "NEW",
+      "resolution": null,
+      "created_at": "2026-11-20T03:12:45Z"
+    },
+    {
+      "alert_id": 18,
+      "transaction_id": "TXN-1003",
+      "account_masked": "XXXX-7731",
+      "amount": 9200.0,
+      "category": "travel",
+      "risk_score": 0.68,
+      "risk_category": "SUSPICIOUS",
+      "top_reasons": [
+        "Unusual spending pattern",
+        "Transaction location mismatch"
+      ],
+      "model_version": "v1",
+      "state": "UNDER_REVIEW",
+      "resolution": null,
+      "created_at": "2026-11-20T03:10:45Z"
+    }
+  ],
+  "page": 1,
+  "page_size": 20,
+  "total": 2
+}
