@@ -1,0 +1,25 @@
+
+{
+  "total_transactions": 5230,
+  "legitimate": 5101,
+  "suspicious": 96,
+  "high_risk": 33,
+  "open_alerts": 12,
+  "latency_ms": {
+    "score_p50": 640,
+    "score_p95": 1450,
+    "alert_p95": 1900
+  },
+  "active_model": {
+    "version": "v1",
+    "drift_status": "OK"
+  },
+  "system_status": {
+    "backend": "UP",
+    "database": "UP",
+    "kafka": "UP",
+    "ml_service": "UP",
+    "streaming": "UP"
+  },
+  "updated_at": "2026-11-20T03:13:00Z"
+}
