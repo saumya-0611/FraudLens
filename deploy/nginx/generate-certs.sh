@@ -9,6 +9,7 @@ mkdir -p "$CERT_DIR"
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout "$CERT_DIR/fraudlens.key" \
   -out "$CERT_DIR/fraudlens.crt" \
-  -subj "/C=IN/ST=UP/L=GreaterNoida/O=FraudLens-Team34/CN=localhost"
+  -subj "/C=IN/ST=UP/L=GreaterNoida/O=FraudLens-Team34/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost"
 
 echo "Generated TLS certificate and key in $CERT_DIR"

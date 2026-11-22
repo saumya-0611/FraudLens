@@ -1,8 +1,9 @@
 const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
+const { createHash, randomBytes, X509Certificate } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs/promises');
+const https = require('node:https');
 const { createRequire } = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
@@ -18,7 +19,8 @@ const backend = path.resolve(__dirname, '../backend');
 const browserBuild = path.resolve(__dirname, '../frontend/dist');
 const backendRequire = createRequire(path.join(backend, 'package.json'));
 process.env.JWT_SECRET = randomBytes(32).toString('hex');
-process.env.COOKIE_SECURE = 'false';
+const openssl = process.env.FRAUDLENS_HTTPS_OPENSSL;
+process.env.COOKIE_SECURE = openssl ? 'true' : 'false';
 process.env.NODE_ENV = 'development';
 process.env.ML_SERVICE_URL = 'http://127.0.0.1:1';
 for (const role of ['ADMIN', 'ANALYST', 'VIEWER']) {
@@ -28,10 +30,15 @@ for (const role of ['ADMIN', 'ANALYST', 'VIEWER']) {
 const express = backendRequire('express');
 const { query, pool } = backendRequire('./src/config/db');
 const { initAlertSocket, closeAlertSocket, broadcastAlert } = backendRequire('./src/websocket/alertSocket');
+const { configureTrustedProxy } = backendRequire('./src/middleware/trustedProxy');
+const api = backendRequire('./src/app');
+const suppliedForwarding = '192.0.2.250';
+const ingressProbe = '/api/__fixture_ingress_probe';
 const root = express();
 root.use(express.static(browserBuild, { index: false }));
 root.get(['/', '/dashboard', '/admin/users'], (_req, res) => res.sendFile(path.join(browserBuild, 'index.html')));
-root.use(backendRequire('./src/app'));
+if (openssl) root.get(ingressProbe, (_req, res) => res.status(204).end());
+root.use(api);
 
 async function eventually(check) {
   for (let i = 0; i < 100; i++) {
@@ -42,6 +49,59 @@ async function eventually(check) {
   throw new Error('Timed out waiting for browser state.');
 }
 
+function run(command, args) {
+  const result = spawnSync(command, args, { encoding: 'utf8', windowsHide: true });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+async function startNginx(name, backendPort, profile) {
+  const cert = path.join(profile, 'fraudlens.crt');
+  const key = path.join(profile, 'fraudlens.key');
+  run(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+    '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost',
+    '-keyout', key, '-out', cert]);
+  const ca = await fs.readFile(cert);
+  const publicKey = new X509Certificate(ca).publicKey;
+  const fingerprint = createHash('sha256').update(publicKey.export({ format: 'der', type: 'spki' })).digest('base64');
+
+  const nginxConf = path.join(profile, 'nginx.conf');
+  const template = await fs.readFile(path.join(__dirname, '../deploy/nginx/nginx.conf'), 'utf8');
+  const upstream = `host.docker.internal:${backendPort}`;
+  await fs.writeFile(nginxConf, template
+    .replace('server frontend:5173;', `server ${upstream};`)
+    .replace('server backend:5000;', `server ${upstream};`));
+  run('docker', ['run', '-d', '--name', name, '-p', '127.0.0.1::443',
+    '--mount', `type=bind,source=${nginxConf},target=/etc/nginx/nginx.conf,readonly`,
+    '--mount', `type=bind,source=${cert},target=/etc/nginx/certs/fraudlens.crt,readonly`,
+    '--mount', `type=bind,source=${key},target=/etc/nginx/certs/fraudlens.key,readonly`,
+    'nginx:alpine']);
+  const publishedPort = run('docker', ['port', name, '443']).split(':').at(-1);
+  const origin = `https://localhost:${publishedPort}`;
+  let lastHealth;
+  try {
+    await eventually(() => new Promise((resolve) => {
+      const probe = https.get(origin + ingressProbe, {
+        ca, family: 4, timeout: 1000, headers: { 'X-Forwarded-For': suppliedForwarding },
+      }, (response) => {
+        response.resume();
+        lastHealth = response.statusCode;
+        resolve(response.statusCode === 204);
+      });
+      probe.on('timeout', () => probe.destroy());
+      probe.on('error', (error) => {
+        lastHealth = error.message;
+        resolve(false);
+      });
+    }));
+  } catch {
+    const logs = spawnSync('docker', ['logs', '--tail', '8', name], { encoding: 'utf8', windowsHide: true });
+    throw new Error(`Nginx HTTPS health check failed (${lastHealth}): ${logs.stderr || logs.stdout}`);
+  }
+  return { origin, fingerprint };
+}
+
 async function verify() {
   const { rows: [initial] } = await query('SELECT count(*) FROM users');
   assert.equal(initial.count, '0', 'Use a fresh disposable browser database.');
@@ -50,16 +110,35 @@ async function verify() {
   const tempRoot = await fs.realpath(os.tmpdir());
   const profile = await fs.mkdtemp(path.join(tempRoot, 'fraudlens-check-chrome-'));
   const server = root.listen(0, '127.0.0.1');
-  initAlertSocket(server);
   let socket;
   let browser;
+  let nginx;
   try {
     await once(server, 'listening');
-    const origin = 'http://127.0.0.1:' + server.address().port;
+    let origin = 'http://127.0.0.1:' + server.address().port;
+    let tlsOptions = [];
+    if (openssl) {
+      nginx = 'fraudlens-https-fixture-' + randomBytes(6).toString('hex');
+      let peer;
+      let forwarded;
+      server.prependListener('request', (req) => {
+        if (req.url === ingressProbe) {
+          peer = req.socket.remoteAddress;
+          forwarded = req.headers['x-forwarded-for'];
+        }
+      });
+      const tls = await startNginx(nginx, server.address().port, profile);
+      assert(peer && forwarded && forwarded !== suppliedForwarding, 'Nginx must replace supplied forwarding data.');
+      configureTrustedProxy(api, peer);
+      origin = tls.origin;
+      tlsOptions = ['--ignore-certificate-errors-spki-list=' + tls.fingerprint];
+    }
+    process.env.WS_ALLOWED_ORIGINS = origin;
+    initAlertSocket(server);
     browser = spawn(process.env.FRAUDLENS_CHROME, [
       '--headless=new', '--remote-debugging-port=0', '--disable-background-networking',
       '--no-first-run', '--no-default-browser-check', '--window-size=1100,720',
-      '--user-data-dir=' + profile, origin,
+      '--user-data-dir=' + profile, ...tlsOptions, origin,
     ], { windowsHide: true, stdio: 'ignore' });
     browser.on('error', () => {});
     const devtoolsPort = await eventually(async () => {
@@ -121,6 +200,7 @@ async function verify() {
     const session = cookies.find(({ name }) => name === 'fl_token');
     assert.equal(session?.httpOnly, true);
     assert.equal(session?.sameSite, 'Lax');
+    assert.equal(session?.secure, Boolean(openssl));
     await eventually(() => evaluate('document.querySelector(".socket-status")?.textContent.includes("Connected")'));
     await broadcastAlert({ alert_id: 19, account_ref: 'fixture-account-1234' });
     await eventually(() => evaluate('document.body.textContent.includes("XXXX-1234")'));
@@ -135,7 +215,7 @@ async function verify() {
     await evaluate('[...document.querySelectorAll("button")].find(b => b.textContent.includes("Sign out")).click()');
     await eventually(() => evaluate('location.pathname === "/" && Boolean(document.querySelector("#username"))'));
     assert.equal(await evaluate('fetch("/api/auth/me").then(r => r.status)'), 401);
-    console.log('PASS: Chrome sign-in, masked live alert, cookie flags, VIEWER denial in UI and API, and sign-out');
+    console.log(`PASS: Chrome via ${openssl ? 'Nginx HTTPS' : 'loopback HTTP'} sign-in, masked live alert, cookie flags, VIEWER denial in UI and API, and sign-out`);
   } finally {
     socket?.close();
     if (browser && browser.exitCode === null && browser.pid) {
@@ -144,6 +224,7 @@ async function verify() {
       await stopped;
     }
     closeAlertSocket();
+    if (nginx) spawnSync('docker', ['rm', '-f', nginx], { windowsHide: true, stdio: 'ignore' });
     await new Promise((resolve) => server.close(resolve));
     try {
       const resolved = await fs.realpath(profile);

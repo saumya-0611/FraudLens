@@ -14,6 +14,7 @@ assert.equal(database.pathname, '/fraudlens_phase2_verification');
 assert.equal(database.protocol, 'postgresql:');
 
 process.env.JWT_SECRET = randomBytes(32).toString('hex');
+process.env.SERVICE_TOKEN = randomBytes(32).toString('hex');
 process.env.JWT_EXPIRES_IN = '2h';
 process.env.COOKIE_SECURE = 'false';
 process.env.NODE_ENV = 'development';
@@ -71,13 +72,42 @@ async function main() {
   assert.equal((await viewer.get('/api/users')).status, 403);
   console.log('PASS: five concurrent failed logins, 15-minute lock, expiry recovery, role denial');
 
-  initAlertSocket(server);
+  const deniedIngestion = await request(app).post('/api/transactions')
+    .set('X-Service-Token', 'incorrect-fixture');
+  assert.equal(deniedIngestion.status, 401);
+  assert.equal(deniedIngestion.body.error.code, 'UNAUTHENTICATED');
+
+  const fixtureId = 'corrections-demo-tx';
+  const fixtureAccount = 'synthetic-account-4321';
+  await query(
+    `INSERT INTO transactions (transaction_id, account_ref, amount, tx_time, category, ingested_at)
+     VALUES ($1, $2, 19.95, now(), 'retail', now())`,
+    [fixtureId, fixtureAccount]
+  );
+  for (const term of ['XXXX-4321', fixtureId]) {
+    const result = await viewer.get('/api/transactions').query({ q: term });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.total, 1);
+    assert.equal(result.body.items[0].account_masked, 'XXXX-4321');
+    assert(!result.text.includes(fixtureAccount));
+  }
+  assert.equal((await viewer.get('/api/transactions').query({ q: fixtureAccount })).body.total, 0);
+  console.log('PASS: invalid service token HTTP 401, masked search and ID search with no raw account match');
+
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  process.env.WS_ALLOWED_ORIGINS = origin;
+  initAlertSocket(server);
   const wsUrl = 'ws://127.0.0.1:' + server.address().port + '/ws/alerts';
-  assert.equal((await once(new WebSocket(wsUrl), 'close'))[0], 4401);
+  assert.equal((await once(new WebSocket(wsUrl, { origin }), 'close'))[0], 4401);
   const cookie = signedInViewer.headers['set-cookie'][0].split(';', 1)[0];
-  const socket = new WebSocket(wsUrl, { headers: { cookie } });
+  const foreign = new WebSocket(wsUrl, { origin: 'https://foreign.example.test', headers: { cookie } });
+  const [, rejectedUpgrade] = await once(foreign, 'unexpected-response');
+  rejectedUpgrade.resume();
+  assert.equal(rejectedUpgrade.statusCode, 403);
+  console.log('PASS: valid session at a foreign WebSocket origin rejected with HTTP 403');
+  const socket = new WebSocket(wsUrl, { origin, headers: { cookie } });
   await once(socket, 'open');
   const message = once(socket, 'message');
   await broadcastAlert({ alert_id: 11, account_ref: 'fixture-account-1234' });

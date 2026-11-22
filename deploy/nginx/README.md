@@ -36,6 +36,9 @@ docker run --rm -d --name fraudlens-nginx \
 On an isolated Compose project, start the services and seed a disposable user first.
 Use that project's network name in the gateway command above. Use your locally trusted
 certificate or trust the test certificate in a disposable browser profile.
+Open the HTTPS test URL directly when using port 8443. The HTTP redirect targets
+the standard HTTPS port. If forwarding a custom hostname to the Vite dev server,
+configure that exact hostname in Vite's allowed hosts.
 
 ```bash
 curl --fail --cacert deploy/nginx/certs/fraudlens.crt https://localhost:8443/health
@@ -49,3 +52,19 @@ the `Secure`, `HttpOnly` and `SameSite=Lax` cookie and the HTTP 101 upgrade for
 `wss://localhost:8443/ws/alerts`. Send one approved synthetic alert through the disposable
 stack and verify the browser shows its masked account. Sign out and confirm the session
 request returns 401 again.
+
+For an automated Windows Docker Desktop smoke test, prepare the fresh
+`fraudlens_phase2_browser` database and frontend build as described in the
+[security verification setup](../../security/attack_tests/README.md), then run:
+
+```powershell
+$env:FRAUDLENS_CHROME = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+$env:FRAUDLENS_HTTPS_OPENSSL = 'C:\Program Files\Git\usr\bin\openssl.exe'
+node security/verify-browser.cjs
+Remove-Item Env:FRAUDLENS_HTTPS_OPENSSL
+```
+
+The harness launches a loopback Nginx container with the checked-in config and
+fixture upstream addresses. It pins a disposable TLS certificate in Chrome and
+asserts Secure cookies, forwarding-header replacement, and masked WebSocket
+delivery. This smoke test uses an in-process alert fixture.
