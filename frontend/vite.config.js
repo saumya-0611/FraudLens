@@ -1,12 +1,14 @@
 
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 
-const backendTarget =
-  process.env.VITE_PROXY_TARGET || 'http://localhost:5000'
+export default defineConfig(({ mode }) => {
+  // Load the frontend's .env files before configuring the development proxy.
+  const env = loadEnv(mode, process.cwd(), '')
+  const backendTarget = env.VITE_PROXY_TARGET || 'http://localhost:5000'
 
-export default defineConfig({
+  return {
   plugins: [
     react(),
     tailwindcss(),
@@ -26,4 +28,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })

@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
     Routes,
     Route,
@@ -8,8 +8,15 @@ import {
 } from "react-router-dom";
 
 import DashboardLayout from "./layouts/DashboardLayout";
-import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./routes/ProtectedRoute";
+import { useAuth } from "./hooks/useAuth";
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Transactions = lazy(() => import("./pages/Transactions"));
+const Alerts = lazy(() => import("./pages/Alerts"));
+const Users = lazy(() => import("./pages/admin/Users"));
+const AuditLogs = lazy(() => import("./pages/admin/AuditLogs"));
+const Models = lazy(() => import("./pages/admin/Models"));
 
 import "./App.css";
 
@@ -54,9 +61,9 @@ function LoginPage() {
         }
     };
 
-    // Social login buttons are visual placeholders for now.
+    // These buttons are visual demo placeholders; no OAuth flow is connected.
     const handleSocialLogin = (provider) => {
-        setMessage(`${provider} authentication will be connected later.`);
+        setMessage(`${provider} sign-in is a demo placeholder; OAuth is not connected.`);
     };
 
     // Wait until the existing session check finishes.
@@ -200,17 +207,9 @@ function LoginPage() {
                                 <div className="label-row">
                                     <label htmlFor="password">Password</label>
 
-                                    <button
-                                        className="text-button"
-                                        type="button"
-                                        onClick={() =>
-                                            setMessage(
-                                                "Please contact your administrator to reset your password."
-                                            )
-                                        }
-                                    >
-                                        Forgot password?
-                                    </button>
+                                    <span className="text-button">
+                                        Contact your administrator for password help
+                                    </span>
                                 </div>
 
                                 <div className="password-wrapper">
@@ -242,11 +241,6 @@ function LoginPage() {
                                 </div>
                             </div>
 
-                            <label className="remember-row">
-                                <input type="checkbox" />
-                                <span>Remember me</span>
-                            </label>
-
                             <button
                                 className="submit-button"
                                 type="submit"
@@ -265,41 +259,22 @@ function LoginPage() {
 
                         <div className="divider">
                             <span />
-                            <p>OR CONTINUE WITH</p>
+                            <p>DEMO PLACEHOLDERS · OAUTH NOT CONNECTED</p>
                             <span />
                         </div>
 
                         <div className="social-grid">
-                            <button
-                                type="button"
-                                onClick={() => handleSocialLogin("Google")}
-                            >
-                                <span className="social-icon google-icon">G</span>
-                                Google
+                            <button type="button" onClick={() => handleSocialLogin("Google")}>
+                                <span className="social-icon google-icon">G</span>Google
                             </button>
-
-                            <button
-                                type="button"
-                                onClick={() => handleSocialLogin("GitHub")}
-                            >
-                                <span className="social-icon github-icon">GH</span>
-                                GitHub
+                            <button type="button" onClick={() => handleSocialLogin("GitHub")}>
+                                <span className="social-icon github-icon">GH</span>GitHub
                             </button>
-
-                            <button
-                                type="button"
-                                onClick={() => handleSocialLogin("Facebook")}
-                            >
-                                <span className="social-icon facebook-icon">f</span>
-                                Facebook
+                            <button type="button" onClick={() => handleSocialLogin("Facebook")}>
+                                <span className="social-icon facebook-icon">f</span>Facebook
                             </button>
-
-                            <button
-                                type="button"
-                                onClick={() => handleSocialLogin("X")}
-                            >
-                                <span className="social-icon x-icon">𝕏</span>
-                                X
+                            <button type="button" onClick={() => handleSocialLogin("X")}>
+                                <span className="social-icon x-icon">𝕏</span>X
                             </button>
                         </div>
 
@@ -321,22 +296,13 @@ function LoginPage() {
 // TEMPORARY PAGE CONTENT
 // ------------------------------------
 
-function PreviewPage({ title, description }) {
-    return (
-        <div className="preview-page">
-            <span className="form-kicker">FRAUD LENS WORKSPACE</span>
-            <h1>{title}</h1>
-            <p>{description}</p>
-        </div>
-    );
-}
-
 // ------------------------------------
 // APPLICATION ROUTES
 // ------------------------------------
 
 function AppRoutes() {
     return (
+        <Suspense fallback={<div className="preview-page">Loading workspace…</div>}>
         <Routes>
             {/* Public login page */}
             <Route path="/" element={<LoginPage />} />
@@ -346,22 +312,12 @@ function AppRoutes() {
                 <Route element={<DashboardLayout />}>
                     <Route
                         path="/dashboard"
-                        element={
-                            <PreviewPage
-                                title="Overview"
-                                description="Your real-time fraud monitoring dashboard will appear here."
-                            />
-                        }
+                        element={<Dashboard />}
                     />
 
                     <Route
                         path="/transactions"
-                        element={
-                            <PreviewPage
-                                title="Transactions"
-                                description="Transaction monitoring will appear here."
-                            />
-                        }
+                        element={<Transactions />}
                     />
 
                     {/* ADMIN and ANALYST only */}
@@ -375,10 +331,7 @@ function AppRoutes() {
                         <Route
                             path="/alerts"
                             element={
-                                <PreviewPage
-                                    title="Fraud Alerts"
-                                    description="Fraud alerts will appear here."
-                                />
+                                <Alerts />
                             }
                         />
                     </Route>
@@ -394,30 +347,21 @@ function AppRoutes() {
                         <Route
                             path="/admin/users"
                             element={
-                                <PreviewPage
-                                    title="User Management"
-                                    description="Administrator user management will appear here."
-                                />
+                                <Users />
                             }
                         />
 
                         <Route
                             path="/admin/audit-logs"
                             element={
-                                <PreviewPage
-                                    title="Audit Logs"
-                                    description="Audit activity will appear here."
-                                />
+                                <AuditLogs />
                             }
                         />
 
                         <Route
                             path="/admin/models"
                             element={
-                                <PreviewPage
-                                    title="Model Management"
-                                    description="Model monitoring and management will appear here."
-                                />
+                                <Models />
                             }
                         />
                     </Route>
@@ -427,6 +371,7 @@ function AppRoutes() {
             {/* Redirect unknown URLs */}
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
     );
 }
 

@@ -1,378 +1,65 @@
-
-/*
-  Mock API service for Fraud Lens.
-
-  This file simulates the backend using local JSON files.
-  It is used only when VITE_USE_MOCKS=true.
-*/
-
-import users from "./users.json";
-import auditLogs from "./audit-logs.json";
-import models from "./models.json";
-import dashboardSummary from "./dashboard-summary.json";
-import dashboardTrends from "./dashboard-trends.json";
-import transactions from "./transactions.json";
-import alerts from "./alerts.json";
-import transactionDetails from "./transaction-details.json";
-import pendingTransaction from "./pending-transaction.json";
-
-import {
-    mockLogin,
-    mockGetCurrentUser,
-    mockLogout,
-} from "./auth";
-
-// Keep alert changes in memory while the app is running.
-let mockAlerts = [...alerts.items];
-
-// Keep user changes in memory while the app is running.
-let mockUsers = [...users.items];
-
-// Create a standard contract-style error.
-function createError(code, message, status = 400) {
-    const error = new Error(message);
-
-    error.status = status;
-    error.data = {
-        error: {
-            code,
-            message,
-            request_id: "mock-request-001",
-        },
-    };
-
-    return error;
-}
-
-// Return mock responses for supported API endpoints.
-export async function mockRequest(path, options = {}) {
-    const method = (options.method || "GET").toUpperCase();
-
-    const url = new URL(path, window.location.origin);
-    const pathname = url.pathname;
-    const searchParams = url.searchParams;
-
-    // --------------------------------
-    // AUTHENTICATION
-    // --------------------------------
-
-    // Login.
-    if (pathname === "/api/auth/login" && method === "POST") {
-        const body = JSON.parse(options.body || "{}");
-
-        return mockLogin(body.username, body.password);
-    }
-
-    // Get current logged-in user.
-    if (pathname === "/api/auth/me" && method === "GET") {
-        return mockGetCurrentUser();
-    }
-
-    // Logout.
-    if (pathname === "/api/auth/logout" && method === "POST") {
-        return mockLogout();
-    }
-
-    // --------------------------------
-    // ADMIN: USERS
-    // --------------------------------
-
-    // Get all users.
-    if (pathname === "/api/users" && method === "GET") {
-        return {
-            items: mockUsers,
-        };
-    }
-
-    // Create a new user.
-    if (pathname === "/api/users" && method === "POST") {
-        const body = JSON.parse(options.body || "{}");
-
-        if (!body.username || !body.password || !body.role) {
-            throw createError(
-                "VALIDATION_ERROR",
-                "Username, password and role are required."
-            );
-        }
-
-        if (!["ADMIN", "ANALYST", "VIEWER"].includes(body.role)) {
-            throw createError(
-                "VALIDATION_ERROR",
-                "Invalid user role."
-            );
-        }
-
-        const existingUser = mockUsers.find(
-            (user) => user.username === body.username
-        );
-
-        if (existingUser) {
-            throw createError(
-                "CONFLICT",
-                "Username already exists.",
-                409
-            );
-        }
-
-        const newUser = {
-            id: Math.max(0, ...mockUsers.map((user) => user.id)) + 1,
-            username: body.username,
-            role: body.role,
-            status: "ACTIVE",
-            created_at: new Date().toISOString(),
-        };
-
-        mockUsers.push(newUser);
-
-        return newUser;
-    }
-
-    // Update an existing user.
-    if (
-        pathname.startsWith("/api/users/") &&
-        method === "PATCH"
-    ) {
-        const userId = Number(pathname.split("/").pop());
-        const body = JSON.parse(options.body || "{}");
-
-        const userIndex = mockUsers.findIndex(
-            (user) => user.id === userId
-        );
-
-        if (userIndex === -1) {
-            throw createError(
-                "NOT_FOUND",
-                "User was not found.",
-                404
-            );
-        }
-
-        const allowedFields = ["role", "status", "password"];
-
-        const invalidField = Object.keys(body).some(
-            (field) => !allowedFields.includes(field)
-        );
-
-        if (invalidField) {
-            throw createError(
-                "VALIDATION_ERROR",
-                "An unsupported user field was provided."
-            );
-        }
-
-        if (
-            body.role &&
-            !["ADMIN", "ANALYST", "VIEWER"].includes(body.role)
-        ) {
-            throw createError(
-                "VALIDATION_ERROR",
-                "Invalid user role."
-            );
-        }
-
-        if (
-            body.status &&
-            !["ACTIVE", "DISABLED"].includes(body.status)
-        ) {
-            throw createError(
-                "VALIDATION_ERROR",
-                "Invalid user status."
-            );
-        }
-
-        const updatedUser = {
-            ...mockUsers[userIndex],
-            ...(body.role && { role: body.role }),
-            ...(body.status && { status: body.status }),
-        };
-
-        mockUsers[userIndex] = updatedUser;
-
-        return updatedUser;
-    }
-
-    // --------------------------------
-    // DASHBOARD
-    // --------------------------------
-
-    // Dashboard summary.
-    if (pathname === "/api/dashboard/summary" && method === "GET") {
-        return dashboardSummary;
-    }
-
-    // Dashboard trends.
-    if (pathname === "/api/dashboard/trends" && method === "GET") {
-        return dashboardTrends;
-    }
-
-    // --------------------------------
-    // TRANSACTIONS
-    // --------------------------------
-
-    // Transaction list with filtering and pagination.
-    if (pathname === "/api/transactions" && method === "GET") {
-        const page = Number(searchParams.get("page") || 1);
-        const pageSize = Number(searchParams.get("page_size") || 20);
-        const risk = searchParams.get("risk");
-        const query = searchParams.get("q")?.toLowerCase();
-
-        let items = [...transactions.items];
-
-        if (risk) {
-            items = items.filter(
-                (item) => item.risk_category === risk
-            );
-        }
-
-        if (query) {
-            items = items.filter(
-                (item) =>
-                    item.transaction_id.toLowerCase().includes(query) ||
-                    item.account_masked.toLowerCase().includes(query)
-            );
-        }
-
-        const start = (page - 1) * pageSize;
-
-        return {
-            items: items.slice(start, start + pageSize),
-            page,
-            page_size: pageSize,
-            total: items.length,
-        };
-    }
-
-    // Pending transaction.
-    if (
-        pathname === "/api/transactions/TXN-1004" &&
-        method === "GET"
-    ) {
-        return pendingTransaction;
-    }
-
-    // Transaction details.
-    if (
-        pathname.startsWith("/api/transactions/") &&
-        method === "GET"
-    ) {
-        const transactionId = pathname.split("/").pop();
-
-        if (transactionId === transactionDetails.transaction_id) {
-            return transactionDetails;
-        }
-
-        throw createError(
-            "TRANSACTION_NOT_FOUND",
-            "Transaction was not found.",
-            404
-        );
-    }
-
-    // --------------------------------
-    // FRAUD ALERTS
-    // --------------------------------
-
-    // Alert list with filtering and pagination.
-    if (pathname === "/api/alerts" && method === "GET") {
-        const page = Number(searchParams.get("page") || 1);
-        const pageSize = Number(searchParams.get("page_size") || 20);
-        const state = searchParams.get("state");
-
-        let items = [...mockAlerts];
-
-        if (state) {
-            items = items.filter(
-                (item) => item.state === state
-            );
-        }
-
-        const start = (page - 1) * pageSize;
-
-        return {
-            items: items.slice(start, start + pageSize),
-            page,
-            page_size: pageSize,
-            total: items.length,
-        };
-    }
-
-    // Update an alert.
-    if (
-        pathname.startsWith("/api/alerts/") &&
-        method === "PATCH"
-    ) {
-        const alertId = Number(pathname.split("/").pop());
-        const body = JSON.parse(options.body || "{}");
-
-        const alertIndex = mockAlerts.findIndex(
-            (item) => item.alert_id === alertId
-        );
-
-        if (alertIndex === -1) {
-            throw createError(
-                "ALERT_NOT_FOUND",
-                "Alert was not found.",
-                404
-            );
-        }
-
-        const currentAlert = mockAlerts[alertIndex];
-
-        if (currentAlert.state === "RESOLVED") {
-            throw createError(
-                "ALERT_ALREADY_RESOLVED",
-                "This alert has already been resolved.",
-                409
-            );
-        }
-
-        const validStates = [
-            "NEW",
-            "UNDER_REVIEW",
-            "RESOLVED",
-        ];
-
-        if (!validStates.includes(body.state)) {
-            throw createError(
-                "INVALID_ALERT_STATE",
-                "The requested alert state is invalid."
-            );
-        }
-
-        if (
-            body.state === "RESOLVED" &&
-            ![
-                "CONFIRMED_FRAUD",
-                "FALSE_POSITIVE",
-            ].includes(body.resolution)
-        ) {
-            throw createError(
-                "RESOLUTION_REQUIRED",
-                "Choose CONFIRMED_FRAUD or FALSE_POSITIVE."
-            );
-        }
-
-        const updatedAlert = {
-            ...currentAlert,
-            state: body.state,
-            resolution:
-                body.state === "RESOLVED"
-                    ? body.resolution
-                    : null,
-        };
-
-        mockAlerts[alertIndex] = updatedAlert;
-
-        return updatedAlert;
-    }
-
-    // --------------------------------
-    // UNIMPLEMENTED ENDPOINT
-    // --------------------------------
-
-    throw createError(
-        "MOCK_ENDPOINT_NOT_FOUND",
-        `No mock response is configured for ${method} ${pathname}.`,
-        404
-    );
+import usersData from "./users.json";
+import auditData from "./audit-logs.json";
+import modelsData from "./models.json";
+import retrainingResults from "./retraining-results.json";
+import summary from "./dashboard-summary.json";
+import trends from "./dashboard-trends.json";
+import transactionsData from "./transactions.json";
+import alertsData from "./alerts.json";
+import detail from "./transaction-details.json";
+import pending from "./pending-transaction.json";
+import { mockLogin, mockGetCurrentUser, mockLogout } from "./auth";
+
+let users = [...usersData.items], alerts = [...alertsData.items];
+let modelState = structuredClone(modelsData);
+let retrainingRequestCount = 0;
+const publicUser = user => Object.fromEntries(Object.entries(user).filter(([key])=>key!=="password"));
+const failure=(code,message,status=400)=>{const e=new Error(message);e.status=status;e.data={error:{code,message,request_id:"mock-request-001"}};throw e;};
+const bodyOf=options=>JSON.parse(options.body||"{}");
+
+export async function mockRequest(path,options={}) {
+ const method=(options.method||"GET").toUpperCase(), url=new URL(path,window.location.origin), pathname=url.pathname, q=url.searchParams;
+ if(pathname==="/api/auth/login"&&method==="POST"){const b=bodyOf(options);return mockLogin(b.username,b.password);}
+ if(pathname==="/api/auth/me"&&method==="GET")return mockGetCurrentUser();
+ if(pathname==="/api/auth/logout"&&method==="POST")return mockLogout();
+ if(pathname==="/api/dashboard/summary"&&method==="GET")return summary;
+ if(pathname==="/api/dashboard/trends"&&method==="GET")return trends;
+ if(pathname==="/api/users"&&method==="GET")return {items:users.map(publicUser)};
+ if(pathname==="/api/users"&&method==="POST"){
+  const b=bodyOf(options);if(!b.username||!b.password||!b.role)failure("VALIDATION_ERROR","Username, password and role are required.");
+  if(!["ADMIN","ANALYST","VIEWER"].includes(b.role))failure("VALIDATION_ERROR","Invalid user role.");
+  if(users.some(u=>u.username===b.username))failure("CONFLICT","Username already exists.",409);
+  const user={id:Math.max(0,...users.map(u=>u.id))+1,username:b.username,role:b.role,status:"ACTIVE",created_at:new Date().toISOString(),password:b.password};users.push(user);return publicUser(user);
+ }
+ if(pathname.startsWith("/api/users/")&&method==="PATCH"){
+  const id=Number(pathname.split("/").pop()), i=users.findIndex(u=>u.id===id);if(i<0)failure("NOT_FOUND","User was not found.",404);
+  const b=bodyOf(options);if(b.role&&!['ADMIN','ANALYST','VIEWER'].includes(b.role))failure("VALIDATION_ERROR","Invalid user role.");if(b.status&&!['ACTIVE','DISABLED'].includes(b.status))failure("VALIDATION_ERROR","Invalid user status.");if(Object.keys(b).some(key=>!['role','status','password'].includes(key)))failure("VALIDATION_ERROR","An unsupported user field was provided.");if(b.role)users[i]={...users[i],role:b.role};if(b.status)users[i]={...users[i],status:b.status};if(Object.hasOwn(b,"password"))users[i]={...users[i],password:b.password};return publicUser(users[i]);
+ }
+ if(pathname==="/api/transactions"&&method==="GET"){
+  let items=[...transactionsData.items,...([pending])];const risk=q.get("risk"), search=q.get("q")?.toLowerCase(), from=q.get("from"), to=q.get("to");
+  if(risk)items=items.filter(x=>x.risk_category===risk);if(search)items=items.filter(x=>`${x.transaction_id} ${x.account_masked}`.toLowerCase().includes(search));if(from)items=items.filter(x=>new Date(x.tx_time)>=new Date(from));if(to)items=items.filter(x=>new Date(x.tx_time)<=new Date(to));
+  const page=Number(q.get("page")||1), page_size=Number(q.get("page_size")||20), start=(page-1)*page_size;return {items:items.slice(start,start+page_size),page,page_size,total:items.length};
+ }
+ if(pathname.startsWith("/api/transactions/")&&method==="GET") {const id=decodeURIComponent(pathname.split("/").pop());if(id===detail.transaction_id)return detail;if(id===pending.transaction_id)return pending;failure("NOT_FOUND","Transaction was not found.",404);}
+ if(pathname==="/api/alerts"&&method==="GET"){
+  let items=[...alerts];const state=q.get("state");if(state)items=items.filter(a=>a.state===state);const page=Number(q.get("page")||1),page_size=Number(q.get("page_size")||20),start=(page-1)*page_size;return {items:items.slice(start,start+page_size),page,page_size,total:items.length};
+ }
+ if(pathname.startsWith("/api/alerts/")&&method==="PATCH"){
+  const id=Number(pathname.split("/").pop()),i=alerts.findIndex(a=>a.alert_id===id);if(i<0)failure("NOT_FOUND","Alert was not found.",404);if(alerts[i].state==="RESOLVED")failure("CONFLICT","This alert has already been resolved.",409);
+  const b=bodyOf(options);if(!["NEW","UNDER_REVIEW","RESOLVED"].includes(b.state))failure("VALIDATION_ERROR","The requested alert state is invalid.");const allowed=(alerts[i].state==="NEW"&&["UNDER_REVIEW","RESOLVED"].includes(b.state))||(alerts[i].state==="UNDER_REVIEW"&&b.state==="RESOLVED");if(!allowed)failure("CONFLICT","Invalid alert state transition.",409);if(b.state==="RESOLVED"&&!['CONFIRMED_FRAUD','FALSE_POSITIVE'].includes(b.resolution))failure("VALIDATION_ERROR","A resolution is required.");
+  alerts[i]={...alerts[i],state:b.state,resolution:b.state==="RESOLVED"?b.resolution:null};return alerts[i];
+ }
+ if(pathname==="/api/audit-logs"&&method==="GET"){
+  let items=[...auditData.items];if(q.get("action"))items=items.filter(x=>x.action===q.get("action"));if(q.get("username"))items=items.filter(x=>(x.username||"").toLowerCase().includes(q.get("username").toLowerCase()));const page=Number(q.get("page")||1),page_size=Number(q.get("page_size")||20),start=(page-1)*page_size;return {items:items.slice(start,start+page_size),page,page_size,total:items.length};
+ }
+ if(pathname==="/api/models"&&method==="GET")return modelState;
+ if(pathname==="/api/models/drift-check"&&method==="POST"){modelState.latest_drift={id:2,created_at:new Date().toISOString(),model_version:modelState.active_version,psi_score:0.08,psi_features:{amount:0.04},status:"OK",sample_size:1000};return modelState.latest_drift;}
+ if(pathname==="/api/models/retrain"&&method==="POST"){
+  // Mock-only fixture sequence; this does not train or evaluate a real model.
+  const fixture=retrainingResults[retrainingRequestCount++%retrainingResults.length];
+  const result={version:`v${modelState.models.length+1}`,status:fixture.status,metrics:structuredClone(fixture.metrics)};
+  modelState.models.push({version:result.version,algorithm:"xgboost+isolation_forest",metrics:result.metrics,status:result.status,artifact_path:"mock",sha256:"0".repeat(64),created_at:new Date().toISOString()});return result;
+ }
+ if(pathname.startsWith("/api/models/")&&pathname.endsWith("/activate")&&method==="POST"){const version=decodeURIComponent(pathname.split("/")[3]),model=modelState.models.find(m=>m.version===version);if(!model)failure("NOT_FOUND","Model was not found.",404);if(!["VALIDATED","ACTIVE","RETIRED"].includes(model.status))failure("CONFLICT","Model is not validated.",409);modelState.models.forEach(m=>{if(m.status==="ACTIVE")m.status="RETIRED";});model.status="ACTIVE";model.activated_at=new Date().toISOString();modelState.active_version=version;return {version,status:"ACTIVE"};}
+ failure("NOT_FOUND",`No mock response for ${method} ${pathname}.`,404);
 }
