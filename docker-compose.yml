@@ -8,7 +8,9 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./database
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
       - .env
@@ -17,7 +19,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
       POSTGRES_DB: ${POSTGRES_DB:-fraudlens}
     volumes:
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fraudlens} -d ${POSTGRES_DB:-fraudlens}"]
@@ -83,9 +84,10 @@ services:
       - model_store:/app/model_store
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health > /dev/null || exit 1"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 6
+      retries: 10
+      start_period: 20s
     networks:
       - fraudlens-net
 
@@ -105,13 +107,12 @@ services:
         condition: service_healthy
       ml-service:
         condition: service_healthy
-    volumes:
-      - ./shared:/shared:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health > /dev/null || exit 1"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 6
+      retries: 10
+      start_period: 15s
     networks:
       - fraudlens-net
 
