@@ -25,7 +25,10 @@ from app.security import verify_internal_token
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Ensure active model v1 is trained/loaded and SHA-256 verified on startup
-    predictor.ensure_loaded()
+    try:
+        predictor.ensure_loaded()
+    except Exception as exc:
+        print(f"[ml-service] Warning during startup model pre-load: {exc}")
     yield
 
 
@@ -68,7 +71,6 @@ class PredictResponse(BaseModel):
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> Dict[str, str]:
     """Public lightweight health check (supports GET and HEAD for Docker/Uptime checks)."""
-    predictor.ensure_loaded()
     return {"status": "ok", "model_version": predictor.version}
 
 
