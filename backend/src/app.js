@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
@@ -27,6 +29,33 @@ app.use(cookieParser());
 
 // Health check (no /api prefix, public).
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// OpenAPI 3.0 JSON spec & Swagger UI (/api-docs and /api-docs/openapi.json)
+const swaggerDirs = [
+  path.resolve(__dirname, './swagger'),
+  path.resolve(__dirname, '../../docs/swagger'),
+  path.resolve(__dirname, '../swagger'),
+];
+app.get('/api-docs/openapi.json', (req, res) => {
+  for (const dir of swaggerDirs) {
+    const p = path.join(dir, 'openapi.json');
+    if (fs.existsSync(p)) {
+      return res.sendFile(p);
+    }
+  }
+  return res.json({ openapi: '3.0.3', info: { title: 'FraudLens API', version: '1.0.0' }, paths: {} });
+});
+app.get('/api-docs', (req, res) => {
+  res.setHeader('Content-Security-Policy', "default-src 'self' https://unpkg.com 'unsafe-inline';");
+  for (const dir of swaggerDirs) {
+    const p = path.join(dir, 'index.html');
+    if (fs.existsSync(p)) {
+      const html = fs.readFileSync(p, 'utf8').replace('./openapi.json', '/api-docs/openapi.json');
+      return res.type('html').send(html);
+    }
+  }
+  return res.type('html').send('<html><body><h1>FraudLens Swagger UI</h1></body></html>');
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
