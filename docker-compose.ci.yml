@@ -1,0 +1,25 @@
+# ── CI Override — used ONLY by Jenkins (BhashaFlow pattern) ──────────────────
+# Ports are offset by +1000 so Jenkins CI never clashes with your local dev stack.
+#
+#   Local dev:   ml-service=8000 (internal)  backend=5000  frontend=5173
+#   Jenkins CI:  ml-service=9000             backend=6000  frontend=6173
+#
+# Usage (Jenkins):
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+services:
+  ml-service:
+    ports: !override
+      - "9000:8000"
+
+  backend:
+    ports: !override
+      - "6000:5000"
+    environment:
+      - ML_SERVICE_URL=http://ml-service:8000
+
+  frontend:
+    ports: !override
+      - "6173:5173"
+    environment:
+      - VITE_PROXY_TARGET=http://backend:5000
