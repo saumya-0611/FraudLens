@@ -1,31 +1,11 @@
 // Users router for /api/users (CONTRACTS section 8).
-const crypto = require('crypto');
 const router = require('express').Router();
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 const { audit } = require('../audit/auditLogger');
 const { query } = require('../config/db');
 const { asyncHandler, AppError } = require('../utils/errors');
-
-async function ensureDefaultUsersSeeded() {
-  const countRes = await query('SELECT COUNT(*) AS c FROM users');
-  if (Number(countRes.rows[0]?.c || 0) === 0) {
-    const defaults = [
-      ['admin', 'ADMIN'],
-      ['analyst', 'ANALYST'],
-      ['viewer', 'VIEWER'],
-    ];
-    for (const [uname, role] of defaults) {
-      const hash = crypto.createHash('sha256').update(`seed:${uname}`).digest('hex');
-      await query(
-        `INSERT INTO users (username, password_hash, role, status)
-         VALUES ($1, $2, $3, 'ACTIVE')
-         ON CONFLICT (username) DO NOTHING`,
-        [uname, hash, role]
-      );
-    }
-  }
-}
+const { hashPassword, ensureSeedUsers } = require('./auth.routes');
 
 // GET /api/users
 router.get(
@@ -33,7 +13,7 @@ router.get(
   authenticate,
   authorize('ADMIN'),
   asyncHandler(async (_req, res) => {
-    await ensureDefaultUsersSeeded();
+    await ensureSeedUsers();
     const result = await query(
       `SELECT id, username, role, status, created_at
        FROM users
@@ -53,7 +33,10 @@ router.post(
     if (!username || !password || !['ADMIN', 'ANALYST', 'VIEWER'].includes(role)) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Valid username, password, and role are required.');
     }
-    const pwdHash = crypto.createHash('sha256').update(String(password)).digest('hex');
+    if (String(password).length < 6) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Password must be at least 6 characters.');
+    }
+    const pwdHash = hashPassword(String(password));
     try {
       const result = await query(
         `INSERT INTO users (username, password_hash, role, status)
@@ -87,20 +70,30 @@ router.patch(
   authenticate,
   authorize('ADMIN'),
   asyncHandler(async (req, res) => {
-    const { role, status } = req.body || {};
+    const targetId = Number(req.params.id);
+    const { role, status, password } = req.body || {};
     if (role && !['ADMIN', 'ANALYST', 'VIEWER'].includes(role)) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Invalid role.');
     }
     if (status && !['ACTIVE', 'DISABLED'].includes(status)) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Invalid status.');
     }
+    // Prevent an admin from disabling or demoting themselves
+    if (req.user?.id && Number(req.user.id) === targetId) {
+      if (status === 'DISABLED' || (role && role !== 'ADMIN')) {
+        throw new AppError(409, 'CONFLICT', 'An administrator cannot disable or demote their own account.');
+      }
+    }
+
+    const pwdHash = password ? hashPassword(String(password)) : null;
     const result = await query(
       `UPDATE users
        SET role = COALESCE($1, role),
-           status = COALESCE($2, status)
-       WHERE id = $3
+           status = COALESCE($2, status),
+           password_hash = COALESCE($3, password_hash)
+       WHERE id = $4
        RETURNING id, username, role, status, created_at`,
-      [role || null, status || null, req.params.id]
+      [role || null, status || null, pwdHash, targetId]
     );
     if (result.rows.length === 0) {
       throw new AppError(404, 'NOT_FOUND', 'User not found.');
