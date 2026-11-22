@@ -60,6 +60,17 @@ describe('WebSocket Alert Socket Tests', () => {
     });
   });
 
+  test('rejects a foreign browser connection even with a valid session', (done) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      headers: { cookie: sessionCookie('VIEWER'), 'Sec-Fetch-Site': 'same-site' },
+    });
+    client.once('error', done);
+    client.once('close', (code) => {
+      expect(code).toBe(4403);
+      done();
+    });
+  });
+
   test('stops sending alerts after the connected account is disabled', async () => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
       headers: { cookie: sessionCookie('VIEWER') },

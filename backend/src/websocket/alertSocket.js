@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const { getSessionUser } = require('../middleware/authenticate');
+const { isForeignBrowserRequest } = require('../middleware/browserRequest');
 const { maskAccount, stripAccountReferences: sanitizeDeep } = require('../utils/mask');
 
 let wss = null;
@@ -40,6 +41,14 @@ function initAlertSocket(server) {
   wss = new WebSocket.Server({ server, path: '/ws/alerts' });
 
   wss.on('connection', (ws, req) => {
+    ws.on('error', (err) => {
+      console.error('[AlertSocket] Client error:', err.message);
+    });
+
+    if (isForeignBrowserRequest(req)) {
+      ws.close(4403, 'Forbidden origin');
+      return;
+    }
     ws.sessionRequest = { headers: { cookie: req.headers.cookie } };
     ws.sessionReady = checkSession(ws);
     ws.isAlive = true;
@@ -48,9 +57,6 @@ function initAlertSocket(server) {
       ws.isAlive = true;
     });
 
-    ws.on('error', (err) => {
-      console.error('[AlertSocket] Client error:', err.message);
-    });
   });
 
   // Keep-alive heartbeat: ping every 30 seconds

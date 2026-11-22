@@ -6,8 +6,9 @@ const { pool } = require('../config/db');
 
 const GENESIS_HASH = '0'.repeat(64);
 const confidentialKeys = new Set([
-  'password', 'passwordhash', 'authorization', 'cookie', 'setcookie', 'fltoken', 'jwt',
-  'token', 'servicetoken', 'xservicetoken', 'internalmltoken', 'xinternaltoken', 'accountref',
+  'password', 'passwordhash', 'newpassword', 'oldpassword', 'authorization', 'cookie',
+  'setcookie', 'fltoken', 'jwt', 'jwtsecret', 'token', 'accesstoken', 'refreshtoken',
+  'servicetoken', 'xservicetoken', 'internalmltoken', 'xinternaltoken', 'accountref', 'databaseurl',
 ]);
 
 function omitConfidentialFields(key, value) {

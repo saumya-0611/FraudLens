@@ -1,11 +1,11 @@
 const rateLimit = require('express-rate-limit');
 const { hasServiceToken } = require('./serviceAuth');
+const { isForeignBrowserRequest } = require('./browserRequest');
 
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
-const foreignSites = new Set(['cross-site', 'same-site']);
 
 function denyForeignBrowserWrites(req, res, next) {
-  if (safeMethods.has(req.method) || !foreignSites.has(req.get('Sec-Fetch-Site'))) {
+  if (safeMethods.has(req.method) || !isForeignBrowserRequest(req)) {
     return next();
   }
   return res.status(403).json({
