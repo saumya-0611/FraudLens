@@ -20,3 +20,24 @@ Initial source audit on 23 November 2026 against `40ccb57`. The status below des
 | C14. Kubernetes manifests and policy validation | PARTIALLY IMPLEMENTED | `deploy/k8s/` has deployments, secrets and policies | Fix Postgres image/schema bootstrapping, reduce injected secrets, validate selectors/ports, document Minikube with policy-capable CNI | YAML parser, API server for kubectl validation, CNI for runtime enforcement |
 
 Backend paths in the table are relative to `backend/src` unless otherwise indicated. Run the full backend suite with `npm.cmd --prefix backend test -- --silent`.
+
+## Final verification
+
+| Task | Final status | Evidence and remaining work |
+|---|---|---|
+| C1 | COMPLETE AND VERIFIED | JWT verifier regressions, Secure cookie configuration in Jest, HttpOnly/SameSite in Chrome. Production TLS remains a deployment check. |
+| C2 | COMPLETE AND VERIFIED | PostgreSQL-backed REST and WebSocket session checks plus route-level role fixtures. |
+| C3 | COMPLETE AND VERIFIED | Five concurrent failures locked the disposable account, expiry reset it, and login throttling, logout and `/me` passed. |
+| C4 | COMPLETE AND VERIFIED | Real bcrypt seeding and idempotent reseeding, with unit checks for missing configuration and DB failure. |
+| C5 | COMPLETE AND VERIFIED | Zod 4.6.7 schema boundaries, malformed shapes and protected fields covered. |
+| C6 | COMPLETE AND VERIFIED | Exact hash order, mismatches and rollback covered in Jest. Real PostgreSQL verified 24 rows including 12 concurrent writes. Independent tail checkpoints are a remaining operational safeguard. |
+| C7 | COMPLETE AND VERIFIED | Configured token, blank/invalid configuration and current-role authorization tested. Kafka delivery and service throughput are outside the auth check. |
+| C8 | COMPLETE AND VERIFIED | Validated audit filters and hashes, user CRUD, self-protection and no sensitive user fields. PostgreSQL role/status changes affected live sessions. |
+| C9 | IMPLEMENTED BUT INCOMPLETELY TESTED | Response, request limits, CSRF/WS browser checks and masking verified in unit tests or Chrome. Production proxy attribution, distributed quotas and ingestion throughput remain. |
+| C10 | IMPLEMENTED BUT INCOMPLETELY TESTED | ML authentication, artifact integrity, local Python/npm audits, secret scan and Compose port review passed. Hosted workflow and production credential isolation remain. |
+| C11 | COMPLETE AND VERIFIED | STRIDE model reviewed against source, manifests and observed boundaries. |
+| C12 | PARTIALLY IMPLEMENTED | Defensive unit and live evidence covers the contract. Live exploit-reproduction cases remain outside the delivered harnesses. |
+| C13 | PARTIALLY IMPLEMENTED | Two-minute guide and safe fixture commands checked. The demo uses an expired-token negative and synthetic audit inconsistency. |
+| C14 | IMPLEMENTED BUT INCOMPLETELY TESTED | Four static checks, 15 dry-run resources and live Calico fixture checks passed. Full FraudLens workload rollout on Minikube remains. |
+
+See the [measured evidence and exact commands](../docs/test-reports/security-report.md) and [viva guide](demo-guide.md).
