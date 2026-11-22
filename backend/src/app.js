@@ -5,6 +5,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const { denyForeignBrowserWrites, apiLimiter, ingestionLimiter } = require('./middleware/apiHardening');
+const { configureTrustedProxy, discardMalformedForwarding } = require('./middleware/trustedProxy');
 
 const authRoutes = require('./routes/auth.routes');           // Shivansh
 const usersRoutes = require('./routes/users.routes');         // Shivansh
@@ -15,6 +16,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const modelsRoutes = require('./routes/models.routes');
 
 const app = express();
+configureTrustedProxy(app);
 
 app.disable('x-powered-by');
 app.use(helmet());
@@ -26,7 +28,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/api', denyForeignBrowserWrites, apiLimiter, ingestionLimiter);
+app.use('/api', discardMalformedForwarding, denyForeignBrowserWrites, apiLimiter, ingestionLimiter);
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 

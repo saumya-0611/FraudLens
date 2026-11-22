@@ -1,4 +1,5 @@
 const http = require('http');
+const { once } = require('node:events');
 const WebSocket = require('ws');
 const {
   initAlertSocket,
@@ -15,9 +16,12 @@ jest.mock('../config/db', () => require('./fixtures/session').mockDatabase(jest.
 describe('WebSocket Alert Socket Tests', () => {
   let server;
   let port;
+  const localOrigin = 'http://localhost:5173';
+  const configuredOrigins = process.env.WS_ALLOWED_ORIGINS;
 
   beforeEach((done) => {
     jest.clearAllMocks();
+    delete process.env.WS_ALLOWED_ORIGINS;
     server = http.createServer((req, res) => res.end('ok'));
     initAlertSocket(server);
     server.listen(0, () => {
@@ -28,11 +32,14 @@ describe('WebSocket Alert Socket Tests', () => {
 
   afterEach((done) => {
     closeAlertSocket();
+    if (configuredOrigins === undefined) delete process.env.WS_ALLOWED_ORIGINS;
+    else process.env.WS_ALLOWED_ORIGINS = configuredOrigins;
     server.close(done);
   });
 
   test('5. connects authenticated client successfully to /ws/alerts', (done) => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      origin: localOrigin,
       headers: { cookie: sessionCookie('ANALYST') },
     });
 
@@ -47,7 +54,7 @@ describe('WebSocket Alert Socket Tests', () => {
   });
 
   test('rejects unauthenticated client with 4401 Unauthorized code', (done) => {
-    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`);
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, { origin: localOrigin });
 
     client.on('close', (code, reason) => {
       expect(code).toBe(4401);
@@ -60,19 +67,56 @@ describe('WebSocket Alert Socket Tests', () => {
     });
   });
 
-  test('rejects a foreign browser connection even with a valid session', (done) => {
-    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
-      headers: { cookie: sessionCookie('VIEWER'), 'Sec-Fetch-Site': 'same-site' },
-    });
-    client.once('error', done);
-    client.once('close', (code) => {
-      expect(code).toBe(4403);
-      done();
-    });
+  function connect(options) {
+    return new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, options);
+  }
+
+  test('accepts an explicitly configured production HTTPS origin', async () => {
+    const origin = 'https://fraudlens.example.test:8443';
+    process.env.WS_ALLOWED_ORIGINS = origin;
+    initAlertSocket(server);
+    const client = connect({ origin, headers: { cookie: sessionCookie('VIEWER') } });
+    try {
+      await once(client, 'open');
+      const [accepted] = getWebSocketServer().clients;
+      expect(await accepted.sessionReady).toBe(true);
+    } finally {
+      client.terminate();
+    }
+  });
+
+  test.each([
+    ['foreign origin', 'https://foreign.example.test'],
+    ['unapproved same-site origin on another port', 'http://localhost:5174'],
+    ['unapproved scheme', 'https://localhost:5173'],
+    ['missing Origin', undefined],
+  ])('rejects a valid session with %s at the HTTP upgrade', async (_label, origin) => {
+    const client = connect({ origin, headers: { cookie: sessionCookie('VIEWER'), 'Sec-Fetch-Site': 'same-origin' } });
+    const [, response] = await once(client, 'unexpected-response');
+    response.resume();
+    expect(response.statusCode).toBe(403);
+    expect(getWebSocketServer().clients.size).toBe(0);
+  });
+
+  test('an approved origin still requires a valid JWT', async () => {
+    const client = connect({ origin: localOrigin, headers: { cookie: 'fl_token=invalid' } });
+    expect((await once(client, 'close'))[0]).toBe(4401);
+  });
+
+  test('an approved origin still requires an active account', async () => {
+    const viewer = users.find(({ role }) => role === 'VIEWER');
+    viewer.status = 'DISABLED';
+    try {
+      const client = connect({ origin: localOrigin, headers: { cookie: sessionCookie('VIEWER') } });
+      expect((await once(client, 'close'))[0]).toBe(4401);
+    } finally {
+      viewer.status = 'ACTIVE';
+    }
   });
 
   test('stops sending alerts after the connected account is disabled', async () => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      origin: localOrigin,
       headers: { cookie: sessionCookie('VIEWER') },
     });
     const received = jest.fn();
@@ -97,6 +141,7 @@ describe('WebSocket Alert Socket Tests', () => {
 
   test('6. handles client disconnection cleanly', (done) => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      origin: localOrigin,
       headers: { cookie: sessionCookie('ADMIN') },
     });
 
@@ -118,6 +163,7 @@ describe('WebSocket Alert Socket Tests', () => {
 
   test('7. broadcasts alert to connected authenticated clients in CONTRACTS format', (done) => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      origin: localOrigin,
       headers: { cookie: sessionCookie('VIEWER') },
     });
 
@@ -184,6 +230,7 @@ describe('WebSocket Alert Socket Tests', () => {
 
   test('broadcastAlert strips deeply nested account_ref before transmission', (done) => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, {
+      origin: localOrigin,
       headers: { cookie: sessionCookie('ANALYST') },
     });
 

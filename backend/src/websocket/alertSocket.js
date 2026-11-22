@@ -1,6 +1,6 @@
 const WebSocket = require('ws');
 const { getSessionUser } = require('../middleware/authenticate');
-const { isForeignBrowserRequest } = require('../middleware/browserRequest');
+const { parseOrigin, configuredWebSocketOrigins } = require('../middleware/browserRequest');
 const { maskAccount, stripAccountReferences: sanitizeDeep } = require('../utils/mask');
 
 let wss = null;
@@ -34,21 +34,24 @@ function sanitizeAlert(alert) {
  * Idempotent: closes any existing instance before re-initializing.
  */
 function initAlertSocket(server) {
+  const allowedOrigins = configuredWebSocketOrigins();
   if (wss) {
     closeAlertSocket();
   }
 
-  wss = new WebSocket.Server({ server, path: '/ws/alerts' });
+  wss = new WebSocket.Server({
+    server,
+    path: '/ws/alerts',
+    verifyClient({ req }, done) {
+      done(allowedOrigins.has(parseOrigin(req.headers.origin)), 403, 'Forbidden origin');
+    },
+  });
 
   wss.on('connection', (ws, req) => {
     ws.on('error', (err) => {
       console.error('[AlertSocket] Client error:', err.message);
     });
 
-    if (isForeignBrowserRequest(req)) {
-      ws.close(4403, 'Forbidden origin');
-      return;
-    }
     ws.sessionRequest = { headers: { cookie: req.headers.cookie } };
     ws.sessionReady = checkSession(ws);
     ws.isAlive = true;
