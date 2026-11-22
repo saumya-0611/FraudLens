@@ -8,16 +8,16 @@ Definitions (CONTRACTS §10):
 """
 import argparse
 from datetime import datetime, timezone
+import importlib
 import os
 from pathlib import Path
 from typing import Any, Dict
-
-import psycopg2
 
 REPORT_PATH = Path(__file__).resolve().parents[1] / "docs" / "test-reports" / "latency.md"
 
 
 def query_latencies(db_url: str) -> Dict[str, Any]:
+    psycopg2 = importlib.import_module("psycopg2")
     with psycopg2.connect(db_url, connect_timeout=5) as conn:
         with conn.cursor() as cur:
             cur.execute(

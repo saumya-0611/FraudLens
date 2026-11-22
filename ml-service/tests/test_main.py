@@ -3,10 +3,11 @@ import os
 from pathlib import Path
 import tempfile
 
-# Use an isolated temporary model_store during unit tests
+# Use an isolated temporary model_store and disable live DB writes during unit tests
 _TMP_STORE = tempfile.mkdtemp(prefix="fraudlens_test_store_")
 os.environ["MODEL_STORE_DIR"] = _TMP_STORE
 os.environ["INTERNAL_ML_TOKEN"] = "test_internal_secret"
+os.environ.pop("DATABASE_URL", None)
 
 from app.main import app  # noqa: E402
 from app.predictor import predictor  # noqa: E402

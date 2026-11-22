@@ -1,0 +1,33 @@
+Issue Type,Issue Key,Summary,Assignee,Sprint,Story Points,Status,Epic Link,Component
+Epic,FL-EPIC-1,Streaming Ingestion Kafka KRaft & PySpark Pipeline,Team Lead,,13,Done,,Streaming
+Epic,FL-EPIC-2,Hybrid AI/ML Engine (XGBoost + Isolation Forest + Explainability),Team Lead,,13,Done,,ML-Service
+Epic,FL-EPIC-3,MLOps Lifecycle (PSI Drift Retraining & Hot-Reload),Team Lead,,10,Done,,ML-Service
+Epic,FL-EPIC-4,Zero-Trust Cyber Security RBAC & Hash-Chained Audit Trail,Shivansh,,15,In Progress,,Security
+Epic,FL-EPIC-5,Real-Time Analyst Dashboard WebSocket Alerts & DevOps CI/CD,Amrita,,18,In Progress,,Frontend-DevOps
+Task,FL-101,Repository scaffold CONTRACTS.md and team branch setup (T0.1),Team Lead,Sprint 1,2,Done,FL-EPIC-5,DevOps
+Story,FL-102,PostgreSQL 16 schema (database/init.sql) for 8 core tables (T0.2),Team Lead,Sprint 1,3,Done,FL-EPIC-1,Database
+Story,FL-103,Docker Compose orchestration with Kafka KRaft & kafka-init topics (T0.3),Team Lead,Sprint 1,5,Done,FL-EPIC-1,DevOps
+Story,FL-104,FastAPI ml-service skeleton with X-Internal-Token constant-time auth (T0.4),Team Lead,Sprint 1,3,Done,FL-EPIC-2,ML-Service
+Story,FL-105,Node/Express backend skeleton config error handler & /health (B1),Riya,Sprint 1,3,Done,FL-EPIC-1,Backend
+Story,FL-106,Sparkov dataset loader & 13 shared features (shared/fraud_features.py) (D1 D3),Riya,Sprint 1,5,Done,FL-EPIC-2,Data-Science
+Test,FL-107,50-row streaming history vs full history feature parity test (D3),Riya,Sprint 1,3,Done,FL-EPIC-2,Data-Science
+Story,FL-108,Streaming micro-batch pipeline (pipeline.py DLQ 50-row lookback) (T1.1),Team Lead,Sprint 1,5,Done,FL-EPIC-1,Streaming
+Story,FL-109,PySpark Structured Streaming wrapper (main_stream.py) & Kafka fallback (T1.2),Team Lead,Sprint 1,5,Done,FL-EPIC-1,Streaming
+Story,FL-110,Transaction stream simulator (simulator/replay.py) with --drift-mode (T1.3),Team Lead,Sprint 1,3,Done,FL-EPIC-1,Simulator
+Story,FL-111,Backend POST /api/transactions 202 Kafka producer ingestion (B2),Riya,Sprint 1,3,Done,FL-EPIC-1,Backend
+Story,FL-112,Backend transactions alerts state machine & dashboard REST APIs (B3 B4),Riya,Sprint 1,5,Done,FL-EPIC-1,Backend
+Story,FL-113,Kafka fraud-alerts consumer & /ws/alerts WebSocket push server (B5),Riya,Sprint 1,5,Done,FL-EPIC-5,Backend
+Story,FL-114,JWT HS256 cookie utility & live DB authenticate/authorize middleware (C1 C2),Shivansh,Sprint 1,5,Done,FL-EPIC-4,Security
+Story,FL-115,React + Vite + Tailwind layout proxy mock API & Login UI (F1-F3),Amrita,Sprint 1,5,Done,FL-EPIC-5,Frontend
+Story,FL-201,Time-ordered XGBoost + Isolation Forest training & SHA-256 registry (T2.1 T2.3),Team Lead,Sprint 2,5,Done,FL-EPIC-2,ML-Service
+Story,FL-202,Real /predict with SHA-256 verification & top-3 pred_contribs reasons (T2.2),Team Lead,Sprint 2,5,Done,FL-EPIC-2,ML-Service
+Story,FL-203,PSI drift calculation (/drift/check) /retrain & hot-reload /activate (T3.1-T3.3 D6),Team Lead,Sprint 2,5,Done,FL-EPIC-3,ML-Service
+Story,FL-204,Threshold tuning (thresholds.json) evaluation report & EDA notebooks (D2 D4 D5),Team Lead,Sprint 2,5,Done,FL-EPIC-2,Data-Science
+Story,FL-205,Backend ML model management proxy routes & Jest unit tests (B6 B7),Riya,Sprint 2,5,Done,FL-EPIC-3,Backend
+Story,FL-206,Jenkins pre-flight gatekeeper (Jenkinsfile) GitHub Actions CI & Ngrok config (T4.2),Team Lead,Sprint 2,3,Done,FL-EPIC-5,DevOps
+Story,FL-207,Async 50/100 TPS load tester (load_test.py) latency report & demo script (T3.4 T4.1 T4.4),Team Lead,Sprint 2,3,Done,FL-EPIC-5,Simulator
+Story,FL-208,Kubernetes manifests (deploy/k8s/) Nginx HTTPS reverse proxy & Cloud blueprints,Team Lead,Sprint 2,5,Done,FL-EPIC-5,DevOps
+Story,FL-209,OpenAPI 3.0 Swagger spec Postman collection Alert Webhook & Selenium E2E suite,Team Lead,Sprint 2,5,Done,FL-EPIC-5,DevOps
+Story,FL-210,Auth routes (/login lockout /logout /me) seed.js Zod schemas & serviceAuth (C3-C5 C7),Shivansh,Sprint 2,5,To Do,FL-EPIC-4,Security
+Story,FL-211,Advisory-locked SHA-256 hash-chained auditLogger.js verifier users/audit routes & attack tests (C6 C8-C12),Shivansh,Sprint 2,5,To Do,FL-EPIC-4,Security
+Story,FL-212,Frontend Dashboard WebSocket alert toast Transactions drawer Alerts modal & Admin pages (F4-F8),Amrita,Sprint 2,8,To Do,FL-EPIC-5,Frontend

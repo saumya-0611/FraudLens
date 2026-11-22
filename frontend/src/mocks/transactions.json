@@ -1,0 +1,54 @@
+{
+    "items": [
+        {
+            "transaction_id": "TXN-1001",
+            "account_masked": "XXXX-2095",
+            "amount": 1850.0,
+            "category": "shopping_net",
+            "merchant": "Example Online Store",
+            "tx_time": "2026-11-20T03:12:45Z",
+            "risk_category": "HIGH_RISK",
+            "fraud_probability": 0.93,
+            "is_anomaly": true,
+            "model_version": "v1",
+            "alert": {
+                "alert_id": 17,
+                "state": "NEW",
+                "resolution": null
+            }
+        },
+        {
+            "transaction_id": "TXN-1002",
+            "account_masked": "XXXX-4812",
+            "amount": 450.0,
+            "category": "food",
+            "merchant": "Example Food Store",
+            "tx_time": "2026-11-20T03:11:45Z",
+            "risk_category": "LEGITIMATE",
+            "fraud_probability": 0.02,
+            "is_anomaly": false,
+            "model_version": "v1",
+            "alert": null
+        },
+        {
+            "transaction_id": "TXN-1003",
+            "account_masked": "XXXX-7731",
+            "amount": 9200.0,
+            "category": "travel",
+            "merchant": "Example Travel Store",
+            "tx_time": "2026-11-20T03:10:45Z",
+            "risk_category": "SUSPICIOUS",
+            "fraud_probability": 0.68,
+            "is_anomaly": true,
+            "model_version": "v1",
+            "alert": {
+                "alert_id": 18,
+                "state": "UNDER_REVIEW",
+                "resolution": null
+            }
+        }
+    ],
+    "page": 1,
+    "page_size": 20,
+    "total": 3
+}

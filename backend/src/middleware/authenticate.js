@@ -12,34 +12,27 @@ function sendUnauthorized(req, res) {
   });
 }
 
-async function authenticate(req, res, next) {
+async function getSessionUser(req) {
   const tokenUser = verifyRequestCookie(req);
+  if (!tokenUser) return null;
 
-  if (!tokenUser) {
-    return sendUnauthorized(req, res);
+  const { rows: [user] } = await query(
+    `SELECT id, username, role, status
+     FROM users
+     WHERE id = $1`,
+    [tokenUser.id]
+  );
+  if (user?.status !== 'ACTIVE' || !['ADMIN', 'ANALYST', 'VIEWER'].includes(user.role)) {
+    return null;
   }
+  return { id: user.id, username: user.username, role: user.role };
+}
 
+async function authenticate(req, res, next) {
   try {
-    const result = await query(
-      `SELECT id, username, role, status
-       FROM users
-       WHERE id = $1`,
-      [tokenUser.id]
-    );
-
-    const user = result.rows[0];
-
-    if (!user || user.status !== 'ACTIVE') {
-      return sendUnauthorized(req, res);
-    }
-
-    // Trust the current database role, not a potentially stale JWT role.
-    req.user = {
-      id: user.id,
-      username: user.username,
-      role: user.role,
-    };
-
+    const user = await getSessionUser(req);
+    if (!user) return sendUnauthorized(req, res);
+    req.user = user;
     return next();
   } catch (error) {
     return next(error);
@@ -47,3 +40,4 @@ async function authenticate(req, res, next) {
 }
 
 module.exports = authenticate;
+module.exports.getSessionUser = getSessionUser;

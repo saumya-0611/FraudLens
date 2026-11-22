@@ -1,0 +1,268 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FraudLens Real-Time Financial Fraud Detection API",
+    "version": "1.0.0",
+    "description": "OpenAPI 3.0 specification for FraudLens Backend REST API (CONTRACTS.md §8) and Internal FastAPI ML Service (CONTRACTS.md §6)."
+  },
+  "servers": [
+    { "url": "http://localhost:5000", "description": "Local Backend API" },
+    { "url": "https://localhost:8443", "description": "Local Nginx HTTPS Gateway" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fl_token",
+        "description": "httpOnly JWT session cookie (HS256, 2h expiry)"
+      },
+      "serviceToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Service-Token",
+        "description": "Constant-time service token for transaction simulator ingestion"
+      },
+      "internalMlToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Token",
+        "description": "Internal service token for ml-service (:8000)"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string", "example": "FORBIDDEN" },
+              "message": { "type": "string", "example": "You do not have access to this resource." },
+              "request_id": { "type": "string", "example": "r-1a2b3c" }
+            }
+          }
+        }
+      },
+      "TransactionIngest": {
+        "type": "object",
+        "required": ["transaction_id", "account_ref", "amount", "tx_time", "category"],
+        "properties": {
+          "transaction_id": { "type": "string", "example": "9f1c2e7a-1111-4222-8333-abcdef123456" },
+          "account_ref": { "type": "string", "example": "2703186189652095" },
+          "amount": { "type": "number", "example": 1850.0 },
+          "tx_time": { "type": "string", "format": "date-time", "example": "2026-11-20T03:12:45Z" },
+          "category": { "type": "string", "example": "shopping_net" },
+          "merchant": { "type": "string", "example": "fraud_Kutch LLC" },
+          "lat": { "type": "number", "example": 36.0788 },
+          "lon": { "type": "number", "example": -81.1781 },
+          "merch_lat": { "type": "number", "example": 36.011293 },
+          "merch_lon": { "type": "number", "example": -82.048315 },
+          "customer_age": { "type": "integer", "example": 34 }
+        }
+      },
+      "TransactionItem": {
+        "type": "object",
+        "properties": {
+          "transaction_id": { "type": "string" },
+          "account_masked": { "type": "string", "example": "XXXX-2095" },
+          "amount": { "type": "number", "example": 1850.0 },
+          "category": { "type": "string", "example": "shopping_net" },
+          "merchant": { "type": "string", "example": "fraud_Kutch LLC" },
+          "tx_time": { "type": "string", "format": "date-time" },
+          "risk_category": { "type": "string", "enum": ["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK", "PENDING"] },
+          "fraud_probability": { "type": "number", "nullable": true, "example": 0.93 },
+          "is_anomaly": { "type": "boolean", "example": true },
+          "model_version": { "type": "string", "example": "v1" }
+        }
+      },
+      "AlertPatch": {
+        "type": "object",
+        "required": ["state"],
+        "properties": {
+          "state": { "type": "string", "enum": ["UNDER_REVIEW", "RESOLVED"] },
+          "resolution": { "type": "string", "enum": ["CONFIRMED_FRAUD", "FALSE_POSITIVE"], "nullable": true }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Public backend health check",
+        "responses": { "200": { "description": "Service is healthy" } }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Authenticate user and set httpOnly fl_token cookie",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": {
+                  "username": { "type": "string", "example": "admin" },
+                  "password": { "type": "string", "example": "change_me" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Authenticated successfully" },
+          "401": { "description": "INVALID_CREDENTIALS" },
+          "429": { "description": "RATE_LIMITED" }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Clear fl_token session cookie",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "204": { "description": "Logged out" } }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Get current authenticated user profile",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "Current user and role" } }
+      }
+    },
+    "/api/transactions": {
+      "post": {
+        "tags": ["Transactions"],
+        "summary": "Ingest a transaction into Kafka transactions-raw (ADMIN or X-Service-Token)",
+        "security": [{ "serviceToken": [] }, { "cookieAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TransactionIngest" } } }
+        },
+        "responses": { "202": { "description": "Accepted for streaming fraud evaluation" } }
+      },
+      "get": {
+        "tags": ["Transactions"],
+        "summary": "List transactions with masked account numbers (account_masked)",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [
+          { "name": "risk", "in": "query", "schema": { "type": "string", "enum": ["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK", "PENDING"] } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "page_size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": { "200": { "description": "Paginated masked transactions" } }
+      }
+    },
+    "/api/transactions/{id}": {
+      "get": {
+        "tags": ["Transactions"],
+        "summary": "Get transaction detail including top_reasons (SHAP) and 13 features",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Transaction details" }, "404": { "description": "NOT_FOUND" } }
+      }
+    },
+    "/api/alerts": {
+      "get": {
+        "tags": ["Alerts"],
+        "summary": "List high-risk fraud alerts (ADMIN, ANALYST)",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [
+          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["NEW", "UNDER_REVIEW", "RESOLVED"] } }
+        ],
+        "responses": { "200": { "description": "Paginated alerts" } }
+      }
+    },
+    "/api/alerts/{id}": {
+      "patch": {
+        "tags": ["Alerts"],
+        "summary": "Transition alert state (NEW -> UNDER_REVIEW -> RESOLVED)",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlertPatch" } } }
+        },
+        "responses": { "200": { "description": "Updated alert" }, "409": { "description": "CONFLICT (already RESOLVED)" } }
+      }
+    },
+    "/api/dashboard/summary": {
+      "get": {
+        "tags": ["Dashboard"],
+        "summary": "Real-time KPI counts, p50/p95 latencies, active model & 5-service health status",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "Dashboard summary payload" } }
+      }
+    },
+    "/api/dashboard/trends": {
+      "get": {
+        "tags": ["Dashboard"],
+        "summary": "Per-minute total vs. flagged transaction counts",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [{ "name": "minutes", "in": "query", "schema": { "type": "integer", "default": 60 } }],
+        "responses": { "200": { "description": "Time-series points" } }
+      }
+    },
+    "/api/models": {
+      "get": {
+        "tags": ["MLOps (ADMIN)"],
+        "summary": "List model versions, active version, and latest PSI drift report",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "Model registry state" } }
+      }
+    },
+    "/api/models/drift-check": {
+      "post": {
+        "tags": ["MLOps (ADMIN)"],
+        "summary": "Run PSI concept drift check on last 1000 scored transactions",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "Drift report (OK / WARNING / DRIFT)" } }
+      }
+    },
+    "/api/models/retrain": {
+      "post": {
+        "tags": ["MLOps (ADMIN)"],
+        "summary": "Train candidate XGBoost + Isolation Forest model and validate PR-AUC gate",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "202": { "description": "Candidate model trained and validated" } }
+      }
+    },
+    "/api/models/{version}/activate": {
+      "post": {
+        "tags": ["MLOps (ADMIN)"],
+        "summary": "Verify SHA-256 and hot-reload VALIDATED model version without restart",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [{ "name": "version", "in": "path", "required": true, "schema": { "type": "string", "example": "v2" } }],
+        "responses": { "200": { "description": "Model activated" } }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "List all platform users (ADMIN only)",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "User list" } }
+      },
+      "post": {
+        "tags": ["Admin"],
+        "summary": "Create a new user (ADMIN only)",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "201": { "description": "User created" } }
+      }
+    },
+    "/api/audit-logs": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "Query SHA-256 hash-chained audit logs (ADMIN only)",
+        "security": [{ "cookieAuth": [] }],
+        "responses": { "200": { "description": "Paginated audit trail" } }
+      }
+    }
+  }
+}

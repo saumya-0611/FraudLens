@@ -2,6 +2,7 @@
 const express = require('express');
 const request = require('supertest');
 const bcrypt = require('bcryptjs');
+const { createHash } = require('node:crypto');
 
 jest.mock('../config/db', () => ({
   query: jest.fn(),
@@ -144,6 +145,20 @@ describe('C3 authentication routes', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('INVALID_CREDENTIALS');
     expect(user.failed_attempts).toBe(1);
+  });
+
+  test('a matching legacy SHA-256 password is rejected', async () => {
+    const bcryptHash = user.password_hash;
+    user.password_hash = createHash('sha256').update(`fraudlens:${PASSWORD}`).digest('hex');
+    try {
+      const res = await request(app).post('/api/auth/login')
+        .send({ username: user.username, password: PASSWORD });
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('INVALID_CREDENTIALS');
+      expect(res.headers['set-cookie']).toBeUndefined();
+    } finally {
+      user.password_hash = bcryptHash;
+    }
   });
 
   test('unknown username receives same generic response', async () => {

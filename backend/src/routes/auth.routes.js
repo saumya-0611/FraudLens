@@ -2,16 +2,20 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 
 const { query } = require('../config/db');
 const { signToken } = require('../utils/jwt');
 const authenticate = require('../middleware/authenticate');
 const { audit } = require('../audit/auditLogger');
+const validate = require('../middleware/validate');
+const { login } = require('../validation/schemas');
 
 const VALID_ROLES = new Set(['ADMIN', 'ANALYST', 'VIEWER']);
 
 // Used for unknown accounts so they still perform a bcrypt comparison.
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-user-password', 10);
+const BCRYPT_HASH = /^\$2[aby]\$(0[4-9]|[12]\d|3[01])\$[./A-Za-z0-9]{53}$/;
 
 const loginLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -53,30 +57,13 @@ async function auditSafely(entry) {
 }
 
 // C3: POST /api/auth/login
-router.post('/login', loginLimiter, async (req, res, next) => {
+router.post('/login', loginLimiter, validate(login), async (req, res, next) => {
   try {
-    const { username, password } = req.body || {};
-
-    // Temporary route-local validation. C5 will introduce Zod schemas.
-    if (
-      typeof username !== 'string' ||
-      !/^[a-zA-Z0-9_.-]{3,50}$/.test(username) ||
-      typeof password !== 'string' ||
-      password.length === 0 ||
-      password.length > 1024
-    ) {
-      return res.status(400).json({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Invalid login request.',
-          request_id: req.id,
-        },
-      });
-    }
+    const { username, password } = req.body;
 
     const result = await query(
       `SELECT id, username, password_hash, role, status,
-              failed_attempts, locked_until
+              locked_until
        FROM users
        WHERE username = $1`,
       [username]
@@ -84,9 +71,10 @@ router.post('/login', loginLimiter, async (req, res, next) => {
 
     const user = result.rows[0];
 
+    const hasBcryptHash = BCRYPT_HASH.test(user?.password_hash);
     const passwordMatches = await bcrypt.compare(
       password,
-      user ? user.password_hash : DUMMY_HASH
+      hasBcryptHash ? user.password_hash : DUMMY_HASH
     );
 
     const locked = user?.locked_until &&
@@ -94,8 +82,18 @@ router.post('/login', loginLimiter, async (req, res, next) => {
 
     const validAccount =
       user &&
+      hasBcryptHash &&
       user.status === 'ACTIVE' &&
       VALID_ROLES.has(user.role);
+    const auditFailure = () => auditSafely({
+      req,
+      userId: user?.id ?? null,
+      username,
+      action: 'LOGIN_FAILURE',
+      entity: 'USER',
+      entityId: user ? String(user.id) : null,
+      details: {},
+    });
 
     if (!validAccount || !passwordMatches || locked) {
       if (validAccount && !passwordMatches && !locked) {
@@ -123,21 +121,14 @@ router.post('/login', loginLimiter, async (req, res, next) => {
                    ELSE NULL
                  END
            WHERE id = $1
+             AND password_hash = $2
+             AND status = 'ACTIVE'
              AND (locked_until IS NULL OR locked_until <= now())`,
-          [user.id]
+          [user.id, user.password_hash]
         );
       }
 
-      await auditSafely({
-        req,
-        userId: user?.id ?? null,
-        username,
-        action: 'LOGIN_FAILURE',
-        entity: 'USER',
-        entityId: user ? String(user.id) : null,
-        details: {},
-      });
-
+      await auditFailure();
       return invalidCredentials(req, res);
     }
 
@@ -147,25 +138,23 @@ router.post('/login', loginLimiter, async (req, res, next) => {
       `UPDATE users
        SET failed_attempts = 0, locked_until = NULL
        WHERE id = $1
+         AND password_hash = $2
          AND status = 'ACTIVE'
          AND (locked_until IS NULL OR locked_until <= now())
        RETURNING id, username, role`,
-      [user.id]
+      [user.id, user.password_hash]
     );
 
     const currentUser = updated.rows[0];
     if (!currentUser || !VALID_ROLES.has(currentUser.role)) {
+      await auditFailure();
       return invalidCredentials(req, res);
     }
 
     const token = signToken(currentUser);
-    const decoded = require('jsonwebtoken').decode(token);
-
-    if (!decoded || typeof decoded.exp !== 'number') {
-      throw new Error('JWT expiry missing');
-    }
-
-    const maxAge = Math.max(0, decoded.exp * 1000 - Date.now());
+    const { exp, iat } = jwt.decode(token);
+    if (exp <= iat) throw new Error('JWT_EXPIRES_IN must be at least one second.');
+    const maxAge = (exp - iat) * 1000;
 
     res.cookie('fl_token', token, {
       ...cookieOptions(),
@@ -185,7 +174,7 @@ router.post('/login', loginLimiter, async (req, res, next) => {
     return res.status(200).json({
       username: currentUser.username,
       role: currentUser.role,
-      expires_in: Math.max(0, Math.floor(maxAge / 1000)),
+      expires_in: exp - iat,
     });
   } catch (error) {
     return next(error);

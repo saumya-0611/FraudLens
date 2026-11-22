@@ -3,6 +3,47 @@
 **Branch prefix:** `shivansh/`  **Presentation:** Fri 27 Nov 2026
 **Read first:** `docs/CONTRACTS.md` (the law), `TEAMMATE.md` (workflow)
 
+---
+
+## CURRENT STATUS & WHAT IS LEFT FOR FINAL SUBMISSION (Updated 22 Nov 2026)
+
+### Already Completed by Shivansh (On `origin/shivansh/auth` @ `f5d6f81`)
+- **C1 (`backend/src/utils/jwt.js` & `backend/src/tests/jwt.test.js`)**:
+  - `signToken(user)` and `verifyRequestCookie(req)` with `HS256` algorithm pinning, duplicate `fl_token` cookie rejection, and 32+ character `JWT_SECRET` validation.
+- **C2 (`backend/src/middleware/authenticate.js`, `authorize.js` & `backend/src/tests/authMiddleware.test.js`)**:
+  - `authenticate` verifies cookie JWT AND queries PostgreSQL `users` table to ensure the user still exists and has `status === 'ACTIVE'`.
+  - `authorize(...roles)` returns `403 FORBIDDEN` and logs an `ACCESS_DENIED` event via `auditLogger`.
+
+### What Is LEFT for Shivansh Before Final Submission (CRITICAL PATH)
+Because `C2` (`authenticate.js`) checks the real `fl_token` cookie and queries the `users` table in PostgreSQL, **nobody can log in once `shivansh/auth` is merged until `C3` (`auth.routes.js`) and `C4` (`seed.js`) are implemented!** Please complete these remaining tasks in order:
+
+1. **C3 — Auth Routes (`backend/src/routes/auth.routes.js`)**:
+   - `POST /api/auth/login`: Validate `{username, password}`, look up user in `users`, verify with `bcryptjs.compare` (run a dummy bcrypt compare when username is not found to prevent timing enumeration), return generic `401 INVALID_CREDENTIALS` on failure.
+   - **Account Lockout**: Increment `failed_attempts` on failure; after 5 failures set `locked_until = now() + interval '15 minutes'`; reject locked accounts with generic `401 INVALID_CREDENTIALS`; reset `failed_attempts = 0, locked_until = NULL` on success.
+   - Set `fl_token` cookie (`httpOnly: true, sameSite: 'lax', secure: process.env.COOKIE_SECURE === 'true', maxAge: 2 * 3600 * 1000`), write `LOGIN_SUCCESS` / `LOGIN_FAILURE` audit log, return `200 {username, role, expires_in: 7200}`.
+   - `POST /api/auth/logout`: Clear `fl_token` cookie, audit `LOGOUT`, return `204`.
+   - `GET /api/auth/me`: Protected by `authenticate`, return `200 {username: req.user.username, role: req.user.role}`.
+   - Add `express-rate-limit` on `/login` (10 req/min/IP -> `429 RATE_LIMITED`).
+2. **C4 — User Seed Script (`backend/scripts/seed.js`)**:
+   - Implement `npm run seed` in `backend/package.json` to insert `admin` (`ADMIN`), `analyst` (`ANALYST`), and `viewer` (`VIEWER`) into `users` with `bcryptjs.hash(password, 10)` from `SEED_ADMIN_PASSWORD`, `SEED_ANALYST_PASSWORD`, `SEED_VIEWER_PASSWORD` (`ON CONFLICT (username) DO NOTHING`).
+3. **C5 — Input Validation (`backend/src/validation/schemas.js` & `backend/src/middleware/validate.js`)**:
+   - Replace the `null` stubs in `schemas.js` with `zod` schemas (`createTransaction`, `alertPatch`, `listQuery`, `login`, `createUser`, `patchUser`) and implement `validate(schema)` returning `400 VALIDATION_ERROR`.
+4. **C6 — Tamper-Evident Hash-Chained Audit Logger (`backend/src/audit/auditLogger.js` & `backend/scripts/verify_audit_chain.js`)**:
+   - Inside a DB transaction holding `SELECT pg_advisory_xact_lock(42)`, fetch the previous row's `entry_hash` (`'0'.repeat(64)` for the first row), compute `entry_hash = SHA256(prev_hash + event_time_iso + username + action + entity + entity_id + JSON.stringify(details))`, and insert into `audit_logs` (catching errors so audit failures never crash a request).
+   - Implement `backend/scripts/verify_audit_chain.js` (`npm run audit:verify`) to walk `audit_logs` in `id ASC` order and detect any modified row.
+5. **C7 — Service Token Middleware (`backend/src/middleware/serviceAuth.js`)**:
+   - Check header `X-Service-Token` against `process.env.SERVICE_TOKEN` using `crypto.timingSafeEqual`; if absent/invalid, fall through to `authenticate` + `authorize('ADMIN')`.
+6. **C8 — Admin Users & Audit Routes (`backend/src/routes/users.routes.js` & `audit.routes.js`)**:
+   - `GET /api/users`, `POST /api/users` (`201`, `409 CONFLICT` on duplicate username, audit `USER_CREATED`), `PATCH /api/users/:id` (prevent admin from disabling/demoting themselves, audit `USER_UPDATED`).
+   - `GET /api/audit-logs` (paginated, filter by `action` and `username`, omit `prev_hash`/`entry_hash` unless `?include_hash=true`).
+7. **C9–C14 — Security Docs, Attack Tests, CI Scan & Kubernetes Review**:
+   - `security/secrets-policy.md` and `security/threat-model.md` (STRIDE table).
+   - `.github/workflows/security-scan.yml` (`npm audit` + `pip-audit`).
+   - `security/attack_tests/` (11 automated attack test cases) + `docs/test-reports/security-report.md`.
+   - Review the Kubernetes & Zero-Trust `NetworkPolicy` manifests in `deploy/k8s/*.yaml` (`C14`).
+
+---
+
 ## Starter prompt for your AI helper (paste this first)
 
 > You are my pair-programmer on the FraudLens capstone (presentation 27 Nov 2026). Read `docs/CONTRACTS.md` and this task file completely before writing code.

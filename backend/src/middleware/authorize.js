@@ -22,10 +22,11 @@ module.exports = (...roles) => {
           username: req.user.username,
           action: 'ACCESS_DENIED',
           entity: 'API',
-          entityId: req.originalUrl || req.url,
+          entityId: (req.baseUrl + req.path).slice(0, 64),
           details: {
             method: req.method,
             role: req.user.role,
+            required_roles: roles,
           },
         }))
         .catch((error) => {

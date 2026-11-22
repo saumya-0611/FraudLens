@@ -1,0 +1,14 @@
+
+{
+  "transaction_id": "TXN-1004",
+  "account_masked": "XXXX-6621",
+  "amount": 720.0,
+  "category": "food",
+  "merchant": "Example Food Store",
+  "tx_time": "2026-11-20T03:15:45Z",
+  "risk_category": "PENDING",
+  "fraud_probability": null,
+  "is_anomaly": false,
+  "model_version": null,
+  "alert": null
+}

@@ -47,6 +47,27 @@ describe('C1 JWT security', () => {
     ).toBeNull();
   });
 
+  test('former stub token is rejected under Jest', () => {
+    expect(verifyRequestCookie(requestWithToken('stub-token'))).toBeNull();
+  });
+
+  test('a signed token must have an expiration', () => {
+    const token = jwt.sign({ username: user.username, role: user.role }, SECRET, {
+      algorithm: 'HS256',
+      subject: String(user.id),
+    });
+    expect(verifyRequestCookie(requestWithToken(token))).toBeNull();
+  });
+
+  test('a correctly signed HS384 token is rejected', () => {
+    const token = jwt.sign({ username: user.username, role: user.role }, SECRET, {
+      algorithm: 'HS384',
+      subject: String(user.id),
+      expiresIn: '2h',
+    });
+    expect(verifyRequestCookie(requestWithToken(token))).toBeNull();
+  });
+
   test('tampered token is rejected', () => {
     const token = signToken(user);
     const parts = token.split('.');

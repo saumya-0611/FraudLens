@@ -1,0 +1,41 @@
+
+{
+  "items": [
+    {
+      "id": 1,
+      "username": "admin",
+      "action": "LOGIN_SUCCESS",
+      "event_time": "2026-11-20T09:00:00Z",
+      "user_id": 1,
+      "entity": "session",
+      "entity_id": "1",
+      "details": {},
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": 2,
+      "username": "analyst",
+      "action": "ALERT_STATE_CHANGED",
+      "event_time": "2026-11-20T09:15:00Z",
+      "user_id": 2,
+      "entity": "alert",
+      "entity_id": "17",
+      "details": { "state": "UNDER_REVIEW" },
+      "ip": "127.0.0.1"
+    },
+    {
+      "id": 3,
+      "username": "admin",
+      "action": "MODEL_DRIFT_CHECK",
+      "event_time": "2026-11-20T10:00:00Z",
+      "user_id": 1,
+      "entity": "model",
+      "entity_id": "v1",
+      "details": {},
+      "ip": "127.0.0.1"
+    }
+  ],
+  "page": 1,
+  "page_size": 20,
+  "total": 3
+}

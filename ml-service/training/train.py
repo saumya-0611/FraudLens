@@ -39,7 +39,8 @@ from app.registry.model_registry import (
 )
 from shared.fraud_features import CATEGORY_MAP_PATH, FEATURE_COLUMNS, build_features
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+_HERE = Path(__file__).resolve()
+REPO_ROOT = _HERE.parents[1] if (_HERE.parents[1] / "shared").exists() else _HERE.parents[2]
 DATASETS_DIR = REPO_ROOT / "data-science" / "datasets"
 THRESHOLDS_PATH = REPO_ROOT / "shared" / "thresholds.json"
 

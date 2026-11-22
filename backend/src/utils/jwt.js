@@ -7,8 +7,8 @@ const JWT_ALGORITHM = 'HS256';
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
 
-  if (!secret || secret.length < 32) {
-    throw new Error('JWT_SECRET must contain at least 32 characters.');
+  if (!secret || secret.trim().length < 32 || /^change_me/i.test(secret)) {
+    throw new Error('JWT_SECRET must be a randomly generated secret of at least 32 characters.');
   }
 
   return secret;
@@ -72,6 +72,7 @@ function verifyRequestCookie(req) {
     const id = Number(payload.sub);
 
     if (
+      !Number.isSafeInteger(payload.exp) ||
       !Number.isSafeInteger(id) ||
       id <= 0 ||
       typeof payload.username !== 'string' ||
