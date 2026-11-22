@@ -2,6 +2,8 @@ const router = require('express').Router();
 const env = require('../config/env');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const validate = require('../middleware/validate');
+const { driftCheck } = require('../validation/schemas');
 const { audit } = require('../audit/auditLogger');
 const { asyncHandler, AppError } = require('../utils/errors');
 
@@ -116,10 +118,12 @@ router.post(
   '/drift-check',
   authenticate,
   authorize('ADMIN'),
+  validate(driftCheck),
   asyncHandler(async (req, res) => {
-    const upstream = await callMlService('/drift/check', {
+    const sampleSize = req.body?.sample_size;
+    const query = sampleSize === undefined ? '' : `?${new URLSearchParams({ sample_size: sampleSize })}`;
+    const upstream = await callMlService(`/drift/check${query}`, {
       method: 'POST',
-      body: req.body,
       timeoutMs: 10000,
     });
 
@@ -133,7 +137,7 @@ router.post(
           entity: 'model',
           entityId: upstream.data?.model_version || null,
           details: {
-            sample_size: req.body?.sample_size,
+            sample_size: upstream.data?.sample_size,
             psi_score: upstream.data?.psi_score,
             status: upstream.data?.status,
           },

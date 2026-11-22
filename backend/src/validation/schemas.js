@@ -47,7 +47,7 @@ const listQuery = z.object({
     risk: z.enum(['PENDING', 'LEGITIMATE', 'SUSPICIOUS', 'HIGH_RISK']).optional(),
     from: date.optional(),
     to: date.optional(),
-    q: z.string().max(120).optional(),
+    q: z.string().max(120).refine((value) => !value.includes('\0')).optional(),
   }),
 });
 
@@ -61,6 +61,9 @@ const auditQuery = z.object({
 });
 
 const login = z.object({ body: z.strictObject({ username, password }) });
+const driftCheck = z.object({
+  body: z.object({ sample_size: z.number().int().min(1).max(10_000).optional() }).optional(),
+});
 const createUser = z.object({ body: z.strictObject({ username, password: newPassword, role }) });
 const patchUser = z.object({
   params: z.object({ id }),
@@ -71,4 +74,4 @@ const patchUser = z.object({
   }).refine((value) => Object.keys(value).length > 0),
 });
 
-module.exports = { createTransaction, alertPatch, listQuery, login, createUser, patchUser, auditQuery };
+module.exports = { createTransaction, alertPatch, listQuery, login, createUser, patchUser, auditQuery, driftCheck };

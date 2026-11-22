@@ -125,6 +125,22 @@ describe('Transaction Route Tests', () => {
     expect(response.body.alert.state).toBe('NEW');
   });
 
+  test.each(['XXXX-4321', 'review-tx', 'merchant name'])('search binds %s and compares only the masked account', async (term) => {
+    query.mockResolvedValueOnce({ rows: [{ total: '0' }] }).mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).get('/api/transactions').set('Cookie', cookie).query({ q: term });
+    expect(res.status).toBe(200);
+    const [[sql, values]] = query.mock.calls;
+    expect(sql).toContain("('XXXX-' || right(t.account_ref, 4)) ILIKE $1");
+    expect(sql).not.toContain('t.account_ref ILIKE');
+    expect(values).toEqual([`%${term}%`]);
+  });
+
+  test.each([[['one', 'two']], ['x'.repeat(121)], ['invalid\0text']])('rejects malformed search input %p', async (q) => {
+    const res = await request(app).get('/api/transactions').set('Cookie', cookie).query({ q });
+    expect(res.status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   test('GET /api/transactions/:id returns 404 when transaction is missing', async () => {
     query.mockResolvedValueOnce({ rows: [] });
 

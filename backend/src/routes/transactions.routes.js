@@ -50,7 +50,7 @@ router.get(
       params.push(`%${q}%`);
       conditions.push(`(
         t.transaction_id ILIKE $${params.length}
-        OR t.account_ref ILIKE $${params.length}
+        OR ('XXXX-' || right(t.account_ref, 4)) ILIKE $${params.length}
         OR t.merchant ILIKE $${params.length}
         OR t.category ILIKE $${params.length}
       )`);

@@ -99,7 +99,7 @@ describe('Models Route Proxy Tests (B6)', () => {
       model_version: 'v1',
       psi_score: 0.08,
       status: 'OK',
-      sample_size: 1000,
+      sample_size: 25,
     };
 
     global.fetch.mockResolvedValueOnce({
@@ -111,20 +111,18 @@ describe('Models Route Proxy Tests (B6)', () => {
 
     const res = await request(app)
       .post('/api/models/drift-check').set('Cookie', adminCookie)
-      .send({ sample_size: 1000 });
+      .send({ sample_size: 25 });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(driftResult);
 
     expect(global.fetch).toHaveBeenCalledWith(
-      `${env.mlServiceUrl}/drift/check`,
+      `${env.mlServiceUrl}/drift/check?sample_size=25`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
-          'Content-Type': 'application/json',
           'X-Internal-Token': 'test-secret-internal-token',
         }),
-        body: JSON.stringify({ sample_size: 1000 }),
       })
     );
 
@@ -134,12 +132,31 @@ describe('Models Route Proxy Tests (B6)', () => {
         entity: 'model',
         entityId: 'v1',
         details: expect.objectContaining({
-          sample_size: 1000,
+          sample_size: 25,
           psi_score: 0.08,
           status: 'OK',
         }),
       })
     );
+  });
+
+  test('drift check preserves the upstream default without a sample size', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ model_version: 'v1', sample_size: 1000 }),
+    });
+    const res = await request(app).post('/api/models/drift-check').set('Cookie', adminCookie);
+    expect(res.status).toBe(200);
+    expect(global.fetch.mock.calls[0][0]).toBe(`${env.mlServiceUrl}/drift/check`);
+  });
+
+  test.each([0, -1, 1.5, 10001, '25', null])('rejects invalid drift sample size %p', async (sampleSize) => {
+    const res = await request(app).post('/api/models/drift-check').set('Cookie', adminCookie)
+      .send({ sample_size: sampleSize });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   test('5. POST /api/models/retrain correctly proxies to /retrain', async () => {
