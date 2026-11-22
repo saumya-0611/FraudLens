@@ -15,8 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from typing import Any, Dict
-
-import httpx
+import urllib.request
 
 
 def compute_signature(raw_body: bytes, secret: str) -> str:
@@ -45,8 +44,9 @@ def send_signed_webhook(
         "X-FraudLens-Event": event_type,
         "X-FraudLens-Signature": compute_signature(body_bytes, webhook_secret),
     }
-    res = httpx.post(url, content=body_bytes, headers=headers, timeout=5.0)
-    return res.status_code
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=5.0) as res:
+        return int(res.status)
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
