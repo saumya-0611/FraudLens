@@ -1,11 +1,13 @@
 # FraudLens Kubernetes Deployments & Services (T4.3 / C14)
 # Only `frontend` (5173) and `backend` (5000) are exposed outside the cluster via NodePort.
-# `postgres`, `kafka`, `ml-service`, and `streaming` are internal-only (ClusterIP).
+# PostgreSQL, Kafka and ML use ClusterIP. Streaming has no listener.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
   namespace: fraudlens
+  labels:
+    fraudlens-phase: bootstrap
 spec:
   replicas: 1
   selector:
@@ -18,15 +20,29 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: fraudlens-postgres:phase2
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432
-          envFrom:
-            - secretRef:
-                name: fraudlens-secrets
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: POSTGRES_DB
           readinessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -U fraudlens -d fraudlens"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 5
             periodSeconds: 5
 ---
@@ -35,6 +51,8 @@ kind: Service
 metadata:
   name: postgres
   namespace: fraudlens
+  labels:
+    fraudlens-phase: bootstrap
 spec:
   type: ClusterIP
   selector:
@@ -48,6 +66,8 @@ kind: Deployment
 metadata:
   name: kafka
   namespace: fraudlens
+  labels:
+    fraudlens-phase: bootstrap
 spec:
   replicas: 1
   selector:
@@ -78,14 +98,24 @@ spec:
               value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
               value: "1@localhost:9093"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
               value: "1"
+          readinessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 8
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: kafka
   namespace: fraudlens
+  labels:
+    fraudlens-phase: bootstrap
 spec:
   type: ClusterIP
   selector:
@@ -111,13 +141,21 @@ spec:
     spec:
       containers:
         - name: ml-service
-          image: fraudlens-ml-service:latest
+          image: fraudlens-ml-service:phase2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
-          envFrom:
-            - secretRef:
-                name: fraudlens-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: DATABASE_URL
+            - name: INTERNAL_ML_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: INTERNAL_ML_TOKEN
           readinessProbe:
             httpGet:
               path: /health
@@ -155,11 +193,23 @@ spec:
     spec:
       containers:
         - name: streaming
-          image: fraudlens-streaming:latest
+          image: fraudlens-streaming:phase2
           imagePullPolicy: IfNotPresent
-          envFrom:
-            - secretRef:
-                name: fraudlens-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: DATABASE_URL
+            - name: INTERNAL_ML_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: INTERNAL_ML_TOKEN
+            - name: KAFKA_BROKERS
+              value: "kafka:9092"
+            - name: ML_SERVICE_URL
+              value: "http://ml-service:8000"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -167,7 +217,7 @@ metadata:
   name: backend
   namespace: fraudlens
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: backend
@@ -178,13 +228,39 @@ spec:
     spec:
       containers:
         - name: backend
-          image: fraudlens-backend:latest
+          image: fraudlens-backend:phase2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
-          envFrom:
-            - secretRef:
-                name: fraudlens-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: JWT_SECRET
+            - name: SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: SERVICE_TOKEN
+            - name: INTERNAL_ML_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fraudlens-secrets
+                  key: INTERNAL_ML_TOKEN
+            - name: JWT_EXPIRES_IN
+              value: "2h"
+            - name: COOKIE_SECURE
+              value: "false"
+            - name: KAFKA_BROKERS
+              value: "kafka:9092"
+            - name: ML_SERVICE_URL
+              value: "http://ml-service:8000"
           readinessProbe:
             httpGet:
               path: /health
@@ -223,13 +299,15 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: fraudlens-frontend:latest
+          image: fraudlens-frontend:phase2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5173
-          envFrom:
-            - secretRef:
-                name: fraudlens-secrets
+          env:
+            - name: VITE_PROXY_TARGET
+              value: "http://backend:5000"
+            - name: VITE_USE_MOCKS
+              value: "false"
 ---
 apiVersion: v1
 kind: Service
