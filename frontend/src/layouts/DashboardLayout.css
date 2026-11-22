@@ -251,6 +251,8 @@
     letter-spacing: 0.7px;
 }
 
+.topbar-profile { display:flex; align-items:center; gap:14px; }
+
 .dashboard-content {
     padding: 30px 34px;
 }

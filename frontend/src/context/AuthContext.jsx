@@ -1,14 +1,11 @@
 
 import {
-    createContext,
-    useContext,
     useEffect,
     useState,
 } from "react";
 
 import { request } from "../services/api";
-
-const AuthContext = createContext(null);
+import { AuthContext } from "./auth-context";
 
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
@@ -81,15 +78,4 @@ export function AuthProvider({ children }) {
             {children}
         </AuthContext.Provider>
     );
-}
-
-// Custom hook for accessing authentication anywhere.
-export function useAuth() {
-    const context = useContext(AuthContext);
-
-    if (!context) {
-        throw new Error("useAuth must be used inside AuthProvider.");
-    }
-
-    return context;
 }

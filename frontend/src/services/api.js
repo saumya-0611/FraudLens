@@ -41,7 +41,7 @@ export async function request(path, options = {}) {
 
     // Redirect to login when the session has expired.
     if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign("/");
 
         throw {
             code: "UNAUTHORIZED",

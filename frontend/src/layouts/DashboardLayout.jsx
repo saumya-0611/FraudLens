@@ -17,7 +17,8 @@ import {
 } from "lucide-react";
 
 import { useState } from "react";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../hooks/useAuth";
+import { useAlertSocket } from "../hooks/useAlertSocket";
 import "./DashboardLayout.css";
 
 const navigation = [
@@ -65,6 +66,8 @@ function DashboardLayout() {
 
     const [menuOpen, setMenuOpen] = useState(false);
     const [logoutError, setLogoutError] = useState("");
+    const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
+    const { status: alertSocketStatus, toasts } = useAlertSocket({ enabled: Boolean(user) && !mockMode });
 
     const visibleNavigation = navigation.filter((item) =>
         item.roles.includes(user?.role)
@@ -202,6 +205,7 @@ function DashboardLayout() {
                     </div>
 
                     <div className="topbar-profile">
+                        <span className="socket-status"><i className={alertSocketStatus === "Connected" ? "online" : "offline"}/>Alerts {alertSocketStatus}</span>
                         <span className="topbar-role">{user?.role}</span>
                     </div>
                 </header>
@@ -211,6 +215,8 @@ function DashboardLayout() {
                 </section>
 
             </main>
+
+            <div className="toast-stack" aria-live="polite">{toasts.map(toast => <div className="toast" role="status" key={toast.id}><span aria-hidden="true">⚠</span>{toast.text}</div>)}</div>
 
         </div>
     );
