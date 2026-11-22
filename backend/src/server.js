@@ -3,6 +3,7 @@ const env = require('./config/env');
 const app = require('./app');
 const { initAlertSocket, closeAlertSocket } = require('./websocket/alertSocket');
 const { startAlertConsumer, stopAlertConsumer } = require('./kafka/alertConsumer');
+const { connectProducer, disconnectProducer } = require('./kafka/producer');
 
 // Plain http.Server (not app.listen) so the WebSocket server (B5) attaches to it.
 const server = http.createServer(app);
@@ -13,6 +14,9 @@ initAlertSocket(server);
 server.listen(env.port, () => {
   console.log(`FraudLens backend listening on port ${env.port}`);
   if (env.nodeEnv !== 'test') {
+    connectProducer().catch((err) => {
+      console.error('[Kafka] Producer initial connect warning:', err.message);
+    });
     startAlertConsumer().catch((err) => {
       console.error('[Kafka] Alert consumer failed to start:', err.message);
     });
@@ -26,6 +30,7 @@ const shutdown = async () => {
   isShuttingDown = true;
   try {
     await stopAlertConsumer();
+    await disconnectProducer();
   } catch (err) {
     console.error('[Shutdown] Error stopping alert consumer:', err.message);
   }

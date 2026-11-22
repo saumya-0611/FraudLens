@@ -8,9 +8,28 @@ If STREAM_ENGINE=fallback (or if Java/Spark runtime is unavailable), cleanly del
 """
 import importlib
 import os
+import threading
+import time
+
+import pandas as pd
 
 from streaming.jobs.consumer_fallback import run_consumer
 from streaming.jobs.pipeline import process_batch
+
+
+def _start_heartbeat_daemon(interval_sec: int = 15) -> None:
+    """Keep `service_heartbeats('streaming', now())` fresh even when Kafka topic is idle."""
+    def _loop() -> None:
+        empty_df = pd.DataFrame()
+        while True:
+            try:
+                process_batch(empty_df, -1)
+            except Exception as exc:
+                print(f"[streaming] Heartbeat update warning: {exc}")
+            time.sleep(interval_sec)
+
+    t = threading.Thread(target=_loop, name="streaming-heartbeat", daemon=True)
+    t.start()
 
 
 def run_spark_stream() -> None:
@@ -87,6 +106,7 @@ def run_spark_stream() -> None:
 
 
 if __name__ == "__main__":
+    _start_heartbeat_daemon(interval_sec=15)
     engine = os.getenv("STREAM_ENGINE", "spark").lower()
     if engine == "fallback":
         run_consumer()

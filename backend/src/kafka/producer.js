@@ -60,6 +60,7 @@ function isProducerConnected() {
 }
 
 module.exports = {
+  connectProducer,
   publishTransaction,
   disconnectProducer,
   isProducerConnected,

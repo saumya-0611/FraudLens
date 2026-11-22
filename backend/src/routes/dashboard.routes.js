@@ -125,11 +125,11 @@ router.get(
     const modelRow = (modelRes && modelRes.rows && modelRes.rows[0]) || {};
     const heartbeatRow = heartbeatRes && heartbeatRes.rows && heartbeatRes.rows[0];
 
-    // Compute streaming status (UP if last_seen within 60 seconds)
+    // Compute streaming status (UP if last_seen within 60 seconds; allow small -5s clock skew)
     let streamingStatus = 'DOWN';
     if (heartbeatRow && heartbeatRow.last_seen) {
       const diffMs = Date.now() - new Date(heartbeatRow.last_seen).getTime();
-      if (diffMs >= 0 && diffMs <= 60000) {
+      if (diffMs >= -5000 && diffMs <= 60000) {
         streamingStatus = 'UP';
       }
     }
