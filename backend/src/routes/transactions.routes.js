@@ -189,6 +189,9 @@ router.get(
       anomaly_score: row.anomaly_score,
       is_anomaly: row.is_anomaly ?? false,
       model_version: row.model_version,
+      tx_time: row.tx_time,
+      ingested_at: row.ingested_at,
+      scored_at: row.scored_at,
       top_reasons: row.top_reasons || [],
       features: row.features || {},
       timestamps: {

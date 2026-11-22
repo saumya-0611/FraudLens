@@ -1,4 +1,4 @@
-﻿const router = require('express').Router();
+const router = require('express').Router();
 
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
@@ -81,6 +81,7 @@ router.get(
       category: row.category,
       merchant: row.merchant,
       tx_time: row.tx_time,
+      risk_category: 'HIGH_RISK',
       risk_score: row.risk_score,
       state: row.state,
       resolution: row.resolution,
