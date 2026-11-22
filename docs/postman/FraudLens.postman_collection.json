@@ -1,0 +1,223 @@
+{
+  "info": {
+    "_postman_id": "472d0fc2-9c8c-429d-9bc6-2802489312e3",
+    "name": "FraudLens Real-Time Financial Fraud Detection API",
+    "description": "End-to-end Postman Collection for FraudLens Backend (:5000), FastAPI ML Service (:8000), and Alert WebHooks.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Health & System Checks",
+      "item": [
+        {
+          "name": "GET Backend Health (/health)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Status is ok', function () { pm.expect(pm.response.json().status).to.eql('ok'); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        },
+        {
+          "name": "GET ML Service Health (:8000/health)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('ML service is healthy', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.have.property('model_version');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{mlServiceUrl}}/health", "host": ["{{mlServiceUrl}}"], "path": ["health"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Auth & RBAC",
+      "item": [
+        {
+          "name": "POST Login as ADMIN (/api/auth/login)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login returns 200 and role', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().role).to.eql('ADMIN');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "GET Current User (/api/auth/me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/auth/me", "host": ["{{baseUrl}}"], "path": ["api", "auth", "me"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Transactions (Ingestion & Masked Queries)",
+      "item": [
+        {
+          "name": "POST Ingest High-Risk Transaction (/api/transactions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 202 ACCEPTED', function () {",
+                  "  pm.response.to.have.status(202);",
+                  "  pm.expect(pm.response.json().status).to.eql('ACCEPTED');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Service-Token", "value": "{{serviceToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"pm-tx-0001\",\n  \"account_ref\": \"2703186189652095\",\n  \"amount\": 3450.00,\n  \"tx_time\": \"2026-11-22T02:15:00Z\",\n  \"category\": \"shopping_net\",\n  \"merchant\": \"fraud_Kutch LLC\",\n  \"lat\": 36.0788,\n  \"lon\": -81.1781,\n  \"merch_lat\": 37.5112,\n  \"merch_lon\": -83.1483,\n  \"customer_age\": 34\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/transactions", "host": ["{{baseUrl}}"], "path": ["api", "transactions"] }
+          }
+        },
+        {
+          "name": "GET List Transactions (/api/transactions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Never exposes raw account_ref', function () {",
+                  "  const rawText = pm.response.text();",
+                  "  pm.expect(rawText).to.not.include('\"account_ref\"');",
+                  "  pm.expect(rawText).to.not.include('2703186189652095');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/transactions?page=1&page_size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transactions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "page_size", "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Alerts & State Machine",
+      "item": [
+        {
+          "name": "GET High-Risk Alerts (/api/alerts)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/alerts?state=NEW", "host": ["{{baseUrl}}"], "path": ["api", "alerts"], "query": [{ "key": "state", "value": "NEW" }] }
+          }
+        },
+        {
+          "name": "PATCH Resolve Alert (/api/alerts/1)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"RESOLVED\",\n  \"resolution\": \"CONFIRMED_FRAUD\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/alerts/1", "host": ["{{baseUrl}}"], "path": ["api", "alerts", "1"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Dashboard & MLOps Lifecycle",
+      "item": [
+        {
+          "name": "GET Dashboard Summary (/api/dashboard/summary)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/dashboard/summary", "host": ["{{baseUrl}}"], "path": ["api", "dashboard", "summary"] }
+          }
+        },
+        {
+          "name": "POST Run PSI Drift Check (/api/models/drift-check)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/models/drift-check", "host": ["{{baseUrl}}"], "path": ["api", "models", "drift-check"] }
+          }
+        },
+        {
+          "name": "POST Trigger Model Retrain (/api/models/retrain)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/models/retrain", "host": ["{{baseUrl}}"], "path": ["api", "models", "retrain"] }
+          }
+        },
+        {
+          "name": "POST Hot-Reload Activate Model v2 (/api/models/v2/activate)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/models/v2/activate", "host": ["{{baseUrl}}"], "path": ["api", "models", "v2", "activate"] }
+          }
+        }
+      ]
+    }
+  ]
+}
