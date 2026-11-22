@@ -137,6 +137,24 @@ describe('C3 authentication routes', () => {
     expect(res.body).not.toHaveProperty('token');
   });
 
+  test('the HTTPS configuration adds Secure and uses the configured JWT lifetime', async () => {
+    const originalSecure = process.env.COOKIE_SECURE;
+    const originalExpiry = process.env.JWT_EXPIRES_IN;
+    process.env.COOKIE_SECURE = 'true';
+    process.env.JWT_EXPIRES_IN = '5m';
+    try {
+      const res = await request(app).post('/api/auth/login')
+        .send({ username: 'testuser', password: PASSWORD });
+      expect(res.status).toBe(200);
+      expect(res.body.expires_in).toBe(300);
+      expect(res.headers['set-cookie'][0]).toMatch(/; Secure(?:;|$)/);
+      expect(res.headers['set-cookie'][0]).toMatch(/; Max-Age=300(?:;|$)/);
+    } finally {
+      process.env.COOKIE_SECURE = originalSecure;
+      process.env.JWT_EXPIRES_IN = originalExpiry;
+    }
+  });
+
   test('wrong password returns generic 401', async () => {
     const res = await request(app)
       .post('/api/auth/login')

@@ -7,7 +7,7 @@ const { createTransaction, listQuery } = require('../validation/schemas');
 const { publishTransaction } = require('../kafka/producer');
 const { asyncHandler } = require('../utils/errors');
 const { query } = require('../config/db');
-const { maskAccount } = require('../utils/mask');
+const { maskAccount, stripAccountReferences } = require('../utils/mask');
 
 // GET /api/transactions - List transactions with filters and pagination.
 router.get(
@@ -195,8 +195,8 @@ router.get(
       tx_time: row.tx_time,
       ingested_at: row.ingested_at,
       scored_at: row.scored_at,
-      top_reasons: row.top_reasons || [],
-      features: row.features || {},
+      top_reasons: stripAccountReferences(row.top_reasons || []),
+      features: stripAccountReferences(row.features || {}),
       timestamps: {
         tx_time: row.tx_time,
         ingested_at: row.ingested_at,

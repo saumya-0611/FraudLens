@@ -100,7 +100,7 @@ describe('Transaction Route Tests', () => {
         anomaly_score: 0.8,
         is_anomaly: true,
         top_reasons: ['Unusual transaction amount'],
-        features: { amount: 500 },
+        features: { amount: 500, enrichment: [{ account_ref: 'fixture-secret-ref', score: 1 }] },
         model_version: 'v1',
         scored_at: '2026-11-21T10:02:00.000Z',
         alert_id: 1,
@@ -120,6 +120,8 @@ describe('Transaction Route Tests', () => {
     expect(response.body).not.toHaveProperty('account_ref');
     expect(response.body.risk_category).toBe('HIGH_RISK');
     expect(response.body.top_reasons).toEqual(['Unusual transaction amount']);
+    expect(response.body.features).toEqual({ amount: 500, enrichment: [{ score: 1 }] });
+    expect(response.text).not.toContain('fixture-secret-ref');
     expect(response.body.alert.state).toBe('NEW');
   });
 

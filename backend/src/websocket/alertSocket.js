@@ -1,34 +1,9 @@
 const WebSocket = require('ws');
 const { getSessionUser } = require('../middleware/authenticate');
-const { maskAccount } = require('../utils/mask');
+const { maskAccount, stripAccountReferences: sanitizeDeep } = require('../utils/mask');
 
 let wss = null;
 let pingInterval = null;
-
-/**
- * Recursively strips account_ref from all levels of an object or array.
- */
-function sanitizeDeep(obj) {
-  if (!obj || typeof obj !== 'object') {
-    return obj;
-  }
-  if (obj instanceof Date || obj instanceof RegExp || (typeof Buffer !== 'undefined' && Buffer.isBuffer(obj))) {
-    return obj;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(sanitizeDeep);
-  }
-  const cleaned = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (key === 'account_ref') {
-      continue; // Strip at any level
-    }
-    cleaned[key] = typeof value === 'object' && value !== null
-      ? sanitizeDeep(value)
-      : value;
-  }
-  return cleaned;
-}
 
 /**
  * Sanitizes an alert payload to guarantee account_ref is NEVER exposed (even nested).
