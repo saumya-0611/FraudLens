@@ -1,0 +1,52 @@
+# FraudLens Zero-Trust Kubernetes NetworkPolicies (C10 / C14, CONTRACTS.md §1 & §6)
+# Enforces network-level isolation:
+# 1. `ml-service` (port 8000) only accepts traffic from `backend` and `streaming` pods.
+# 2. `postgres` (port 5432) only accepts traffic from `backend`, `streaming`, and `ml-service` pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-ml-service-ingress
+  namespace: fraudlens
+spec:
+  podSelector:
+    matchLabels:
+      app: ml-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              app: streaming
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-postgres-ingress
+  namespace: fraudlens
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              app: streaming
+        - podSelector:
+            matchLabels:
+              app: ml-service
+      ports:
+        - protocol: TCP
+          port: 5432
