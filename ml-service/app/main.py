@@ -37,6 +37,9 @@ app = FastAPI(
     version="1.0.0",
     description="Internal FastAPI service for real-time hybrid fraud scoring, PSI drift detection, and model lifecycle.",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 

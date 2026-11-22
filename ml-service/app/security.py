@@ -12,9 +12,9 @@ from typing import Optional
 from fastapi import Header, HTTPException, status
 
 
-def get_internal_token() -> str:
+def get_internal_token() -> Optional[str]:
     """Return the configured INTERNAL_ML_TOKEN from environment."""
-    return os.getenv("INTERNAL_ML_TOKEN", "change_me_internal_token")
+    return os.getenv("INTERNAL_ML_TOKEN")
 
 
 def verify_internal_token(
@@ -23,7 +23,13 @@ def verify_internal_token(
     """FastAPI dependency that enforces X-Internal-Token with constant-time comparison."""
     expected = get_internal_token()
     provided = x_internal_token or ""
-    if not provided or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+    if (
+        not provided
+        or not expected
+        or not expected.strip()
+        or expected.strip().lower().startswith("change_me")
+        or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-Internal-Token",
