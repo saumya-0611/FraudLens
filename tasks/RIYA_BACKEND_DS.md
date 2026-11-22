@@ -3,6 +3,37 @@
 **Branch prefix:** `riya/`  **Presentation:** Fri 27 Nov 2026
 **Read first:** `docs/CONTRACTS.md` (the law), `TEAMMATE.md` (workflow)
 
+---
+
+## CURRENT STATUS & WHAT IS LEFT FOR FINAL SUBMISSION (Updated 22 Nov 2026)
+
+### Already Completed by Riya (Great job!)
+- **Merged on `main` (`origin/riya/backend-skeleton` & `origin/riya/features`)**:
+  - **B1**: Express skeleton (`backend/src/app.js`, `server.js`, `config/db.js`, `config/env.js`, `utils/errors.js`, `Dockerfile`, `tests/health.test.js`).
+  - **D1 & D3**: `data-science/load_data.py`, `data-science/test_load_data.py`, `shared/fraud_features.py` (all 13 features), `shared/category_map.json`, `shared/feature_spec.md`, `shared/tests/test_features_parity.py`.
+- **Completed on `origin/riya/backend-ingestion` (`ddb46f7`, 5 commits)**:
+  - **B2**: `backend/src/kafka/producer.js` + `POST /api/transactions` (202 Accepted -> Kafka `transactions-raw`).
+  - **B3**: `GET /api/transactions`, `GET /api/transactions/:id`, `GET /api/alerts`, `PATCH /api/alerts/:id` (alert state machine + `maskTransaction`).
+  - **B4**: `GET /api/dashboard/summary` and `GET /api/dashboard/trends`.
+  - **B5**: `backend/src/kafka/alertConsumer.js` and `backend/src/websocket/alertSocket.js` (`/ws/alerts` real-time push).
+  - **B6**: `backend/src/routes/models.routes.js` (proxies `/api/models/*` to `ml-service` with `X-Internal-Token` and audit logging).
+  - **B7**: 7 Jest unit test suites (`transactions.test.js`, `alerts.test.js`, `dashboard.test.js`, `models.test.js`, `producer.test.js`, `alertConsumer.test.js`, `alertSocket.test.js`).
+- **Completed with Lead on `main`**:
+  - **D2, D4, D5, D6, D7**: `data-science/drift/psi.py`, `data-science/evaluation/evaluate_model.py`, `shared/thresholds.json`, notebooks `01_eda.ipynb`..`04_evaluation.ipynb`, `docs/test-reports/model-evaluation.md`.
+
+### What Is LEFT for Riya Before Final Submission
+1. **Merge `origin/riya/backend-ingestion` (`ddb46f7`) into `dev` and `main`**:
+   - Open a PR from `riya/backend-ingestion` -> `dev` (or ask Lead to merge it) so Amrita and Shivansh have your real routes on `dev`/`main`.
+2. **B3 Sample Data Seeder (`backend/scripts/seed_sample_data.js`)**:
+   - Add `backend/scripts/seed_sample_data.js` (`npm run seed:sample`) that inserts ~200 realistic rows into `transactions`, `fraud_results`, and `alerts` so the Frontend, Postman, and Selenium tests can query populated tables even before the Kafka/Spark stream is started.
+3. **B5 / Rubric Integration (Swagger & Outbound Alert Webhook)**:
+   - Mount `docs/swagger/` at `GET /api-docs` in `backend/src/app.js` (e.g. `express.static` or `swagger-ui-express` serving `docs/swagger/openapi.json`) so backend Swagger UI is live at `http://localhost:5000/api-docs`.
+   - In `backend/src/kafka/alertConsumer.js`, if `process.env.ALERT_WEBHOOK_URL` is set, fire a non-blocking `fetch(process.env.ALERT_WEBHOOK_URL, { method: 'POST', ... })` when a `HIGH_RISK` alert arrives (satisfies the Capstone **WebHooks** rubric item alongside WebSockets).
+4. **C9 Hardening Coordination with Shivansh**:
+   - Confirm `helmet()`, JSON body size limit (`express.json({ limit: '100kb' })`), and rate-limiter mounting in `backend/src/app.js`.
+
+---
+
 ## Starter prompt for your AI helper (paste this first)
 
 > You are my pair-programmer on the FraudLens capstone (presentation 27 Nov 2026). Read `docs/CONTRACTS.md` and this task file completely before writing code.

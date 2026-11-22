@@ -3,6 +3,37 @@
 **Branch prefix:** `lead/`  **Presentation:** Fri 27 Nov 2026
 **Read first:** `docs/CONTRACTS.md` (the law), `TEAMMATE.md` (workflow)
 
+---
+
+## CURRENT STATUS & WHAT IS LEFT FOR FINAL SUBMISSION (Updated 22 Nov 2026)
+
+### Already Completed by Team Lead (Merged on `main` & `dev`)
+- **Phase 0 (`T0.1–T0.4`)**: Repo scaffold, `database/init.sql`, `docker-compose.yml` (Postgres 16, Kafka KRaft, `kafka-init`, `ml-service`, `streaming`, `backend`, `frontend`), FastAPI `ml-service` with constant-time `X-Internal-Token` security.
+- **Phase 1 (`T1.1–T1.3`)**: `streaming/jobs/pipeline.py` (validation, DLQ, 50-row lookback feature engineering via `shared/fraud_features.py`, chunked `/predict` with 3x retry, threshold classification, idempotent writes, `fraud-alerts` publisher, heartbeats), `streaming/jobs/main_stream.py` (PySpark Structured Streaming + `consumer_fallback.py`), `simulator/replay.py`.
+- **Phase 2 (`T2.1–T2.4`)**: `ml-service/training/train.py` (time-ordered XGBoost + Isolation Forest hybrid training, `reference_stats.json`, deterministic folder SHA-256), `ml-service/app/predictor.py` (SHA-256 verification before load, `pred_contribs` top-3 human-readable explanations).
+- **Phase 3 (`T3.1–T3.4`)**: `POST /drift/check` (`ml-service/app/drift/checker.py` calling `data-science/drift/psi.py`), `POST /retrain` (`ml-service/app/retrain/service.py`), hot-reload `POST /models/{version}/activate`, `simulator/latency_report.py` -> `docs/test-reports/latency.md`.
+- **Data Science Support (`D2, D4–D7`)**: `data-science/drift/psi.py`, `data-science/evaluation/evaluate_model.py`, `shared/thresholds.json`, notebooks `01_eda.ipynb`..`04_evaluation.ipynb`, `docs/test-reports/model-evaluation.md`.
+- **Phase 4 & Full Capstone Rubric Deliverables**:
+  - `simulator/load_test.py` (50 TPS sustained / 100 TPS burst) & `docs/demo-script.md`.
+  - **Git/GitHub & Jenkins**: `.github/workflows/ci.yml` & `deploy/Jenkinsfile` (pre-flight gatekeeper on offset ports `6173`/`6000`).
+  - **Docker & Kubernetes**: `docker-compose.yml` + `deploy/k8s/*.yaml` (Deployments, Services, Secrets template, Zero-Trust `NetworkPolicy`).
+  - **Nginx & HTTPS**: `deploy/nginx/nginx.conf` (TLS 1.2/1.3 termination, SPA routing, `/api` proxy, `/ws/alerts` WebSocket upgrade) + `deploy/nginx/generate-certs.sh`.
+  - **Swagger & Postman**: `docs/swagger/openapi.json` + interactive Swagger UI (`docs/swagger/index.html`) & `docs/postman/FraudLens.postman_collection.json` + `FraudLens.postman_environment.json`.
+  - **WebHooks**: `deploy/webhooks/webhook_receiver.py` (HMAC-SHA256 signed alert webhook receiver) + Ngrok webhook config (`deploy/ngrok.yml`).
+  - **Selenium E2E Testing**: `tests/selenium/test_fraudlens_e2e.py`.
+  - **Cloud Deployment & JIRA**: `render.yaml`, `deploy/vercel.json`, `deploy/CLOUD_DEPLOYMENT.md`, `docs/jira/JIRA_SPRINT_BACKLOG.md`, and `docs/jira/jira_backlog_import.csv`.
+
+### What Is LEFT for Team Lead Before Fri 27 Nov Presentation
+1. **Merge Teammates' Remaining PRs into `dev` -> `main`**:
+   - Merge Riya's `origin/riya/backend-ingestion` (`B2–B7`).
+   - Merge Shivansh's `origin/shivansh/auth` (`C1–C2`) and upcoming `C3–C12` security commits.
+   - Merge Amrita's `origin/dev` (`F1–F3`) and upcoming `F4–F8` UI screens.
+2. **T4.1 Live Full-Stack Load Test & T4.5 Backup Demo Video (Wed 25 – Thu 26 Nov)**:
+   - Run `python simulator/load_test.py --tps 50 --duration 300` and `--tps 100 --duration 120` against the integrated Docker stack to update `docs/test-reports/latency.md` with live full-stack numbers.
+   - Rehearse `docs/demo-script.md` twice, record the backup demo video (`T4.5`), and tag `main` as `demo-ready`.
+
+---
+
 ## Starter prompt for your AI helper (paste this first)
 
 > You are my pair-programmer on the FraudLens capstone (presentation 27 Nov 2026). Read `docs/CONTRACTS.md` and this task file completely before writing code.

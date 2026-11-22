@@ -1,0 +1,68 @@
+# Render Cloud Deployment Blueprint for FraudLens (BhashaFlow-style Cloud Architecture)
+# Deploys:
+#   1. fraudlens-db         (Managed PostgreSQL 16)
+#   2. fraudlens-ml-service (Private Docker Web Service, FastAPI :8000)
+#   3. fraudlens-backend    (Public Docker Web Service, Node/Express :5000)
+#   4. fraudlens-streaming  (Docker Background Worker, PySpark/Kafka pipeline)
+
+databases:
+  - name: fraudlens-db
+    databaseName: fraudlens
+    user: fraudlens
+    plan: free
+
+services:
+  - type: pserv
+    name: fraudlens-ml-service
+    runtime: docker
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fraudlens-db
+          property: connectionString
+      - key: INTERNAL_ML_TOKEN
+        sync: false
+
+  - type: web
+    name: fraudlens-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "5000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fraudlens-db
+          property: connectionString
+      - key: ML_SERVICE_URL
+        value: "http://fraudlens-ml-service:8000"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SERVICE_TOKEN
+        sync: false
+      - key: INTERNAL_ML_TOKEN
+        sync: false
+
+  - type: worker
+    name: fraudlens-streaming
+    runtime: docker
+    dockerfilePath: ./streaming/Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fraudlens-db
+          property: connectionString
+      - key: ML_SERVICE_URL
+        value: "http://fraudlens-ml-service:8000"
+      - key: INTERNAL_ML_TOKEN
+        sync: false

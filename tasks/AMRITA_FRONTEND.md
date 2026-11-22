@@ -3,6 +3,46 @@
 **Branch prefix:** `amrita/`  **Presentation:** Fri 27 Nov 2026
 **Read first:** `docs/CONTRACTS.md` (the law), `TEAMMATE.md` (workflow)
 
+---
+
+## CURRENT STATUS & WHAT IS LEFT FOR FINAL SUBMISSION (Updated 22 Nov 2026)
+
+### Already Completed by Amrita (On `origin/dev` @ `298b99a` & `origin/amrita/frontend-skeleton`)
+- **F1 (Project Setup & Layout)**: Vite + React + Tailwind config, `frontend/vite.config.js` (`/api` and `/ws` dev proxy to backend), `frontend/Dockerfile`, `src/layouts/DashboardLayout.jsx` (dark theme + role-filtered sidebar for `ADMIN`, `ANALYST`, `VIEWER`).
+- **F2 (API Layer & Mocks)**: `src/services/api.js` (`credentials: "include"` wrapper), `src/mocks/mockApi.js`, and 8 mock JSON payloads (`alerts.json`, `transactions.json`, `transaction-details.json`, `dashboard-summary.json`, `dashboard-trends.json`, `users.json`, etc.).
+- **F3 (Authentication & Route Protection)**: `src/context/AuthContext.jsx`, `src/routes/ProtectedRoute.jsx`, and the `LoginPage` UI in `src/App.jsx`.
+
+### What Is LEFT for Amrita Before Final Submission (CRITICAL PATH)
+Right now in `src/App.jsx`, all logged-in routes (`/dashboard`, `/transactions`, `/alerts`, `/admin/users`, `/admin/audit-logs`, `/admin/models`) render a placeholder `<PreviewPage />`. You need to replace `<PreviewPage />` with the actual screens using your `src/services/api.js` functions:
+
+1. **F4 — Dashboard Page (`src/pages/Dashboard.jsx`)**:
+   - **System Status Bar**: Show `system_status` (`backend`, `database`, `kafka`, `ml_service`, `streaming`) with green/red dot + `UP`/`DOWN` text.
+   - **5 Summary KPI Cards**: `total_transactions`, `legitimate`, `suspicious`, `high_risk`, `open_alerts`, plus `latency_ms` (`score_p50`, `score_p95`, `alert_p95`). Auto-refresh every 5 seconds.
+   - **60-Minute Trend Chart**: Use `recharts` (`AreaChart` or `LineChart`) plotting `points` (`minute`, `total`, `flagged`) from `GET /api/dashboard/trends?minutes=60`.
+   - **Active Model & Drift Chip**: Display `active_model.version` and `active_model.drift_status` (`OK` / `WARNING` / `DRIFT`).
+   - **Recent Alerts List**: Clickable rows opening the alert/transaction detail view.
+2. **F5 — Real-Time WebSocket Alert Hook & Toast (`src/hooks/useAlertSocket.js`)**:
+   - Connect to `ws(s)://${window.location.host}/ws/alerts` with auto-reconnect backoff.
+   - On `{"type": "NEW_ALERT", "alert": ...}`, display a prominent toast notification (`"New HIGH-RISK alert: XXXX-2095 ($1,850.00)"`) with both icon and text, and refresh the dashboard/alerts state.
+3. **F6 — Transactions Page & Explainable AI Drawer (`src/pages/Transactions.jsx`)**:
+   - Filter bar (`risk` dropdown, `from`/`to` dates, `q` search box) + paginated table (`tx_time`, `account_masked`, `amount`, `category`, `merchant`, `risk_category` badge, `fraud_probability`).
+   - Clicking a row calls `GET /api/transactions/:id` and opens a details drawer displaying:
+     - **Why Flagged (`top_reasons`)**: Bullet list of the top 3 SHAP/XGBoost feature reasons (`text` + `impact`).
+     - **13 Features (`features`)**: Collapsible key-value grid, `model_version`, `is_anomaly`, and linked `alert` state.
+4. **F7 — Alerts Management Page (`src/pages/Alerts.jsx`, `ADMIN` & `ANALYST` only)**:
+   - Paginated alerts table filtered by `state` (`NEW`, `UNDER_REVIEW`, `RESOLVED`).
+   - Action buttons/dropdown to move `NEW -> UNDER_REVIEW -> RESOLVED`.
+   - Choosing `RESOLVED` must open a modal forcing the analyst to pick **`CONFIRMED_FRAUD`** or **`FALSE_POSITIVE`** before calling `PATCH /api/alerts/:id`. Show a clear error toast if the server returns `409 CONFLICT`.
+5. **F8 — Admin Pages (`src/pages/admin/Users.jsx`, `AuditLogs.jsx`, `Models.jsx`, `ADMIN` only)**:
+   - `Users.jsx`: List users (`GET /api/users`), "Add User" form (`POST /api/users`), and role/status toggle (`PATCH /api/users/:id`).
+   - `AuditLogs.jsx`: Paginated table (`GET /api/audit-logs`) with `action` and `username` filters.
+   - `Models.jsx`: Model versions table (`GET /api/models` showing `version`, `status`, `pr_auc`, `sha256`), latest PSI drift card, and action buttons for **Run Drift Check** (`POST /api/models/drift-check`), **Retrain Candidate** (`POST /api/models/retrain`), and **Activate** (`POST /api/models/:version/activate`, enabled when `status === 'VALIDATED'`).
+6. **F9, F10 & Selenium E2E Readiness**:
+   - Keep standard form labels/placeholders (`Username`, `Password`, `Sign In`) so our **Selenium E2E test suite (`tests/selenium/test_fraudlens_e2e.py`)** passes against your UI.
+   - Take clean screenshots of every screen for the final report and replace the old BhashaFlow slides in the team PPT with FraudLens slides.
+
+---
+
 ## Starter prompt for your AI helper (paste this first)
 
 > You are my pair-programmer on the FraudLens capstone (presentation 27 Nov 2026). Read `docs/CONTRACTS.md` and this task file completely before writing code.
