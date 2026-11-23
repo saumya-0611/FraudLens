@@ -1,5 +1,4 @@
-fastapi==0.165.0
-starlette==1.6.0
+fastapi==0.115.5
 uvicorn[standard]==0.32.1
 pydantic==2.10.2
 numpy==1.26.4
@@ -9,4 +8,4 @@ xgboost==2.1.2
 joblib==1.4.2
 psycopg2-binary==2.9.10
 httpx==0.28.0
-pytest==9.0.3
+pytest==8.3.3

@@ -4,6 +4,8 @@ const app = require('./app');
 const { initAlertSocket, closeAlertSocket } = require('./websocket/alertSocket');
 const { startAlertConsumer, stopAlertConsumer } = require('./kafka/alertConsumer');
 const { connectProducer, disconnectProducer } = require('./kafka/producer');
+const { query } = require('./config/db');
+const { seedUsers } = require('../scripts/seed');
 
 // Plain http.Server (not app.listen) so the WebSocket server (B5) attaches to it.
 const server = http.createServer(app);
@@ -14,6 +16,11 @@ initAlertSocket(server);
 server.listen(env.port, () => {
   console.log(`FraudLens backend listening on port ${env.port}`);
   if (env.nodeEnv !== 'test') {
+    query("DELETE FROM users WHERE password_hash !~ '^\\$2[aby]\\$'")
+      .then(() => seedUsers())
+      .catch((err) => {
+        console.error('[Seed] Initial user seed warning:', err.message);
+      });
     connectProducer().catch((err) => {
       console.error('[Kafka] Producer initial connect warning:', err.message);
     });

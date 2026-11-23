@@ -149,7 +149,7 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="Path to fraudTest.csv")
     args = parser.parse_args()
 
-    token = os.getenv("SERVICE_TOKEN", "change_me_service_token")
+    token = os.getenv("SERVICE_TOKEN", "fl_service_token_simulator_2026")
     headers = {"X-Service-Token": token, "Content-Type": "application/json"}
 
     rows = _load_or_generate_rows(args.csv, args.limit, args.seed, args.fraud_boost, args.drift_mode)

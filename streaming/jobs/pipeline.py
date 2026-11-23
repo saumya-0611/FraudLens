@@ -111,7 +111,7 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
     Raises on persistent failure so the batch is not committed and will be retried.
     """
     ml_url = os.getenv("ML_SERVICE_URL", "http://ml-service:8000").rstrip("/") + "/predict"
-    token = os.getenv("INTERNAL_ML_TOKEN", "change_me_internal_token")
+    token = os.getenv("INTERNAL_ML_TOKEN", "fl_internal_ml_token_2026")
     headers = {"X-Internal-Token": token}
 
     model_version = "v1"

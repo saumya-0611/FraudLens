@@ -53,4 +53,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main };
+module.exports = { main, seedUsers };

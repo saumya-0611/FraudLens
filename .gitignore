@@ -21,3 +21,6 @@ ml-service/model_store/*
 .DS_Store
 pgdata/
 spark-checkpoints/
+.vscode/
+pyrightconfig.json
+pyproject.toml
