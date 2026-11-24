@@ -6,7 +6,7 @@ const { startAlertConsumer, stopAlertConsumer } = require('./kafka/alertConsumer
 const { connectProducer, disconnectProducer } = require('./kafka/producer');
 const { query } = require('./config/db');
 const { ensureSchema } = require('../scripts/bootstrapSchema');
-const { seedUsers } = require('../scripts/seed');
+const { seedUsers, SeedConfigurationError } = require('../scripts/seed');
 const { seedSampleData } = require('../scripts/seed_sample_data');
 
 // Plain http.Server (not app.listen) so the WebSocket server (B5) attaches to it.
@@ -17,11 +17,24 @@ initAlertSocket(server);
 
 const inlineMode = (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase() === 'inline';
 
+async function reportMalformedPasswordHashes() {
+  try {
+    // Match the bcrypt formats accepted by password login. NULL means a social-only account.
+    const { rows: [{ count }] } = await query(
+      'SELECT COUNT(*)::int AS count FROM users WHERE password_hash IS NOT NULL AND password_hash !~ $1',
+      [String.raw`^\$2[aby]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$`]
+    );
+    if (count > 0) console.warn('[Bootstrap] Accounts with malformed password hashes:', count);
+  } catch {
+    console.warn('[Bootstrap] Could not check for malformed password hashes.');
+  }
+}
+
 server.listen(env.port, () => {
   console.log(`FraudLens backend listening on port ${env.port} (pipeline=${inlineMode ? 'inline' : 'kafka'})`);
   if (env.nodeEnv !== 'test') {
     ensureSchema()
-      .then(() => query("DELETE FROM users WHERE password_hash !~ '^\\$2[aby]\\$'"))
+      .then(reportMalformedPasswordHashes)
       .then(() => seedUsers())
       .then(async () => {
         if (process.env.AUTO_SEED_SAMPLE === 'true') {
@@ -32,7 +45,8 @@ server.listen(env.port, () => {
         }
       })
       .catch((err) => {
-        console.error('[Bootstrap] Initial schema/seed warning:', err.message);
+        console.error('[Bootstrap] Initial schema/seed warning:', err instanceof SeedConfigurationError
+          ? err.message : 'Database initialization or seeding failed.');
       });
 
     connectProducer().catch((err) => {
