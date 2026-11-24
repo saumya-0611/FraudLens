@@ -48,7 +48,7 @@ describe('Alerts Route Tests', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
-  test('PATCH /api/alerts/:id moves NEW alert to UNDER_REVIEW', async () => {
+  test.each(['ADMIN', 'ANALYST'])('%s can move an alert from NEW to UNDER_REVIEW', async (role) => {
     query
       .mockResolvedValueOnce({
         rows: [{ alert_id: 1, state: 'NEW' }],
@@ -65,7 +65,7 @@ describe('Alerts Route Tests', () => {
       });
 
     const response = await request(app)
-      .patch('/api/alerts/1').set('Cookie', cookie)
+      .patch('/api/alerts/1').set('Cookie', sessionCookie(role))
       .send({ state: 'UNDER_REVIEW' });
 
     expect(response.status).toBe(200);
