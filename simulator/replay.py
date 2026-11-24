@@ -79,14 +79,19 @@ def _load_or_generate_rows(
         if time_col in sampled.columns:
             sampled = sampled.sort_values(time_col).reset_index(drop=True)
 
-        for _, r in sampled.head(limit).iterrows():
+        run_tag = uuid.uuid4().hex[:6]
+        now_utc = datetime.now(timezone.utc)
+        total_rows = min(len(sampled), limit)
+
+        for idx, (_, r) in enumerate(sampled.head(limit).iterrows()):
             amt = float(r.get("amt", r.get("amount", 45.0)))
             if drift_mode:
-                amt = round(amt * 3.0, 2)
-            tx_dt = pd.to_datetime(r.get(time_col, datetime.now(timezone.utc)), utc=True)
+                amt = round(amt * 3.5, 2)
+            tx_dt = now_utc - timedelta(seconds=max(0, (total_rows - 1 - idx) * 2))
+            base_tx_id = str(r.get("trans_num", r.get("transaction_id", uuid.uuid4().hex[:12])))
             rows.append(
                 {
-                    "transaction_id": str(r.get("trans_num", r.get("transaction_id", uuid.uuid4().hex))),
+                    "transaction_id": f"{base_tx_id}-{run_tag}",
                     "account_ref": str(r.get("cc_num", r.get("account_ref", "2703186189652095"))),
                     "amount": round(amt, 2),
                     "tx_time": tx_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -107,26 +112,45 @@ def _load_or_generate_rows(
 
     print(f"[simulator] {csv_path} not found; generating {limit} synthetic Sparkov transactions...")
     accounts = ["2703186189652095", "4532015112830366", "6011000990139424", "378282246310005"]
-    base_time = datetime.now(timezone.utc) - timedelta(seconds=limit)
+    base_time = datetime.now(timezone.utc) - timedelta(seconds=limit * 2)
 
     for i in range(limit):
-        is_boosted_fraud = rng.random() < max(fraud_boost, 0.1)
-        amt = rng.uniform(2200.0, 4800.0) if is_boosted_fraud else rng.uniform(8.0, 140.0)
+        roll = rng.random()
+        is_boosted_fraud = roll < max(fraud_boost, 0.12)
+        is_suspicious_tier = (not is_boosted_fraud) and (roll < max(fraud_boost, 0.12) + 0.18)
+        tx_dt = base_time + timedelta(seconds=i * 2)
+
+        if is_boosted_fraud:
+            amt = rng.uniform(1800.0, 4400.0)
+            cat = rng.choice(["shopping_net", "misc_net"])
+            merch = "fraud_Kutch LLC"
+            m_lat, m_lon = 38.6012, -84.2048
+        elif is_suspicious_tier:
+            amt = rng.uniform(450.0, 820.0)
+            cat = rng.choice(["shopping_net", "entertainment", "misc_net"])
+            merch = "OutOfState_Vendor_Net"
+            m_lat, m_lon = 37.2512, -82.6548
+        else:
+            amt = rng.uniform(12.0, 125.0)
+            cat = rng.choice(CATEGORIES)
+            merch = "Local_Merchant_POS"
+            m_lat, m_lon = 36.0812, -81.1795
+
         if drift_mode:
-            amt *= 3.0
-        tx_dt = base_time + timedelta(seconds=i)
+            amt *= 3.5
+
         rows.append(
             {
                 "transaction_id": f"sim-{seed}-{i:05d}-{uuid.uuid4().hex[:8]}",
                 "account_ref": rng.choice(accounts),
                 "amount": round(amt, 2),
                 "tx_time": tx_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "category": rng.choice(CATEGORIES),
-                "merchant": "fraud_Kutch LLC" if is_boosted_fraud else "Local_Merchant_POS",
+                "category": cat,
+                "merchant": merch,
                 "lat": 36.0788,
                 "lon": -81.1781,
-                "merch_lat": 37.5012 if is_boosted_fraud else 36.0812,
-                "merch_lon": -83.2048 if is_boosted_fraud else -81.1795,
+                "merch_lat": m_lat,
+                "merch_lon": m_lon,
                 "customer_age": rng.randint(22, 68),
             }
         )
