@@ -2,7 +2,12 @@
 const { Pool } = require('pg');
 const env = require('./env');
 
-const pool = new Pool({ connectionString: env.databaseUrl, max: 10 });
+const poolConfig = { connectionString: env.databaseUrl, max: 10 };
+if (env.databaseSsl || (typeof env.databaseUrl === 'string' && env.databaseUrl.includes('sslmode=require'))) {
+  poolConfig.ssl = { rejectUnauthorized: false };
+}
+
+const pool = new Pool(poolConfig);
 
 // Idle clients can emit errors (e.g. DB restarts). Log instead of crashing.
 pool.on('error', (err) => console.error('Unexpected PG pool error:', err.message));
