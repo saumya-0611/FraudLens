@@ -1,11 +1,12 @@
 # FraudLens Model Evaluation & Threshold Report (D4, D5, D7)
 
-- **Generated at:** `2026-11-18T18:17:16Z`
-- **Training set size:** `2500` rows (fraud rate: `3.88%`)
-- **Holdout test set size:** `800` rows (time-ordered split, never random-split)
+- **Generated at:** `2026-11-24T07:20:50Z`
+- **Engine:** Real `XGBoost` (`binary:logistic`, `aucpr`) + `IsolationForest` (`contamination=0.01`, legitimate-only 98.5th percentile calibration)
+- **Training set size:** `5000` rows (fraud rate: `5.22%`)
+- **Holdout test set size:** `2000` rows (fraud rate: `3.8%`, time-ordered split, never random-split)
 - **Active thresholds (`shared/thresholds.json`):** `high = 0.80`, `low = 0.40`
 
-> **Why PR-AUC is our headline metric (not Accuracy):** In financial fraud detection where baseline fraud prevalence is near 0.5%–4%, a trivial classifier predicting "all legitimate" achieves >96%–99.5% accuracy while catching 0% of fraud. **Precision-Recall AUC (PR-AUC)** directly measures performance on the minority fraud class across decision thresholds.
+> **Why PR-AUC is our headline metric (not Accuracy):** In financial fraud detection where baseline fraud prevalence is near 0.5%–5%, a trivial classifier predicting "all legitimate" achieves >95%–99.5% accuracy while catching 0% of fraud. **Precision-Recall AUC (PR-AUC)** directly measures performance on the minority fraud class across decision thresholds.
 
 ---
 
@@ -13,8 +14,8 @@
 
 | Metric | Value | Role |
 |---|---:|---|
-| **PR-AUC (Average Precision)** | **1.0000** | **Primary metric** (minority-class ranking quality) |
-| **ROC-AUC** | 1.0000 | Secondary ranking metric |
+| **PR-AUC (Average Precision)** | **0.8398** | **Primary metric** (minority-class ranking quality) |
+| **ROC-AUC** | 0.9880 | Secondary ranking metric |
 
 ---
 
@@ -22,37 +23,42 @@
 
 Decision logic (CONTRACTS.md §7, FR-08):
 - `HIGH_RISK`: `p >= 0.80` OR (`p >= 0.40` AND `is_anomaly == true`) -> raises real-time alert
-- `SUSPICIOUS`: `p >= 0.40` OR `is_anomaly == true` -> flagged in transaction list (`0.0%` of test volume)
+- `SUSPICIOUS`: `p >= 0.40` OR `is_anomaly == true` -> flagged in transaction list (`4.75%` of test volume)
 - `LEGITIMATE`: otherwise
 
 | Model Configuration | Precision | Recall | F1-Score | HIGH_RISK Alert Rate | TP | FP | FN | TN |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **XGBoost Alone** (`p >= 0.80`) | 1.0000 | 1.0000 | 1.0000 | 4.12% | 33 | 0 | 0 | 767 |
-| **Hybrid (XGBoost + Isolation Forest)** | **1.0000** | **1.0000** | **1.0000** | **4.12%** | **33** | **0** | **0** | **767** |
+| **XGBoost Alone** (`p >= 0.80`) | 0.8933 | 0.8816 | 0.8874 | 3.75% | 67 | 8 | 9 | 1916 |
+| **Hybrid (XGBoost + Isolation Forest)** | **0.8118** | **0.9079** | **0.8571** | **4.25%** | **69** | **16** | **7** | **1908** |
 
-### Why the Hybrid Model Wins (D5 Comparison)
-Combining supervised **XGBoost** with unsupervised **Isolation Forest** (`contamination=0.01`) captures novel anomalous transactions whose supervised probability falls in the borderline `[0.40, 0.80)` gray zone. This boosts recall on atypical high-velocity or long-distance fraud patterns while keeping the overall `HIGH_RISK` alert volume constrained to the analyst alert budget (~1–4% of transactions).
+### Why the Hybrid Model Wins on Fraud Recall (D5 Comparison)
+Combining supervised **XGBoost** with unsupervised **Isolation Forest** (`contamination=0.01`, calibrated on legitimate-only training scores) captures novel anomalous transactions whose supervised probability falls in the borderline `[0.40, 0.80)` gray zone. This boosts recall from **88.16% to 90.79%** (catching additional high-distance / velocity-burst fraud) while keeping the `SUSPICIOUS` review queue at **4.75%** and `HIGH_RISK` alerts tightly bounded at **4.25%**.
 
 ---
 
 ## 3. Threshold Justification (D4)
 
-We chose `high = 0.80` and `low = 0.40` in `shared/thresholds.json` so that `HIGH_RISK` alerts remain tightly bounded within the ~1–2% operational alert budget on normal traffic while preserving high precision and >80% fraud recall. The `low = 0.40` threshold routes medium-probability and unsupervised Isolation Forest outliers into the `SUSPICIOUS` tier so analysts can inspect them on demand without being overwhelmed by real-time alert toasts.
+We chose `high = 0.80` and `low = 0.40` in `shared/thresholds.json` so that `HIGH_RISK` alerts preserve >81% precision and >90% recall while keeping real-time alert volume tightly bounded. The `low = 0.40` threshold routes medium-probability and unsupervised Isolation Forest outliers into the `SUSPICIOUS` tier (`4.75%` of test volume) so analysts can inspect borderline activity on demand without alert fatigue.
 
 ---
 
-## 4. Top Feature Importances (13 Contract Features)
+## 4. Top Feature Importances (All 13 Contract Features)
 
-| Rank | Feature | Relative Importance |
+| Rank | Feature | Relative Gain Importance |
 |---:|---|---:|
-| 1 | `log_amount` | 0.6521 |
-| 2 | `distance_km` | 0.3007 |
-| 3 | `amount` | 0.0472 |
-| 4 | `hour` | 0.0000 |
-| 5 | `day_of_week` | 0.0000 |
-| 6 | `is_night` | 0.0000 |
-| 7 | `category_code` | 0.0000 |
-| 8 | `customer_age` | 0.0000 |
+| 1 | `is_night` | 0.6545 |
+| 2 | `distance_km` | 0.1848 |
+| 3 | `amount` | 0.0286 |
+| 4 | `log_amount` | 0.0197 |
+| 5 | `hour` | 0.0197 |
+| 6 | `day_of_week` | 0.0144 |
+| 7 | `amount_ratio` | 0.0142 |
+| 8 | `customer_age` | 0.0132 |
+| 9 | `avg_amount_prior` | 0.0128 |
+| 10 | `tx_count_24h` | 0.0121 |
+| 11 | `tx_count_1h` | 0.0093 |
+| 12 | `secs_since_last_tx` | 0.0092 |
+| 13 | `category_code` | 0.0075 |
 
 ---
 

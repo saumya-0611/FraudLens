@@ -62,29 +62,32 @@ def run_evaluation() -> Dict[str, Any]:
         params = {
             "objective": "binary:logistic",
             "eval_metric": "aucpr",
-            "max_depth": 5,
-            "eta": 0.1,
+            "max_depth": 4,
+            "min_child_weight": 5,
+            "reg_lambda": 2.5,
+            "eta": 0.08,
             "subsample": 0.8,
             "colsample_bytree": 0.8,
-            "scale_pos_weight": spw,
+            "scale_pos_weight": min(spw, 10.0),
             "seed": 42,
         }
-        booster = xgb.train(params, dtrain, num_boost_round=80)
+        booster = xgb.train(params, dtrain, num_boost_round=75)
         test_probs = np.asarray(booster.predict(dtest), dtype="float64")
         gain_map = booster.get_score(importance_type="gain")
         total_gain = sum(gain_map.values()) or 1.0
         importances = {col: round(float(gain_map.get(col, 0.0) / total_gain), 4) for col in FEATURE_COLUMNS}
     else:
         clf = GradientBoostingClassifier(n_estimators=60, max_depth=4, random_state=42)
-        clf.fit(X_train, y_train, sample_weight=np.where(y_train == 1, spw, 1.0))
+        clf.fit(X_train, y_train, sample_weight=np.where(y_train == 1, min(spw, 10.0), 1.0))
         test_probs = np.asarray(clf.predict_proba(X_test)[:, 1], dtype="float64")
         importances = dict(zip(FEATURE_COLUMNS, [round(float(x), 4) for x in clf.feature_importances_]))
 
-    # Train Isolation Forest on legitimate training rows (contamination=0.01)
+    # Train Isolation Forest on legitimate training rows (contamination=0.01) and calibrate threshold on legitimate scores
+    X_legit_np = X_train[y_train == 0].to_numpy(dtype="float64")
     iforest = IsolationForest(n_estimators=100, contamination=0.01, random_state=42)
-    iforest.fit(X_train[y_train == 0].to_numpy(dtype="float64"))
-    train_raw_anom = -iforest.score_samples(X_train.to_numpy(dtype="float64"))
-    anom_thresh = float(np.percentile(train_raw_anom, 99.0))
+    iforest.fit(X_legit_np)
+    legit_raw_anom = -iforest.score_samples(X_legit_np)
+    anom_thresh = float(np.percentile(legit_raw_anom, 98.5))
     test_is_anom = (-iforest.score_samples(X_test.to_numpy(dtype="float64"))) >= anom_thresh
 
     with open(THRESHOLDS_PATH, "r", encoding="utf-8") as f:
