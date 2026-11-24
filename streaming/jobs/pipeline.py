@@ -9,6 +9,7 @@ Independent of Spark so it can be called from either:
 from datetime import datetime, timezone
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import time
@@ -133,6 +134,40 @@ def _validate_rows(pdf: pd.DataFrame) -> Tuple[pd.DataFrame, List[Dict[str, Any]
     return valid_df, dlq_messages
 
 
+def _parse_predictions(body: Any, expected_ids: set[str]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+    if not isinstance(body, dict):
+        raise ValueError("Invalid ML prediction response.")
+    version, predictions = body.get("model_version"), body.get("predictions")
+    if not isinstance(version, str) or not version.strip() or len(version) > 30 or not isinstance(predictions, list):
+        raise ValueError("Invalid ML version or predictions.")
+
+    parsed = {}
+    for item in predictions:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid ML prediction.")
+        tx_id, probability = item.get("transaction_id"), item.get("fraud_probability")
+        reasons = item.get("top_reasons")
+        if (
+            not isinstance(tx_id, str) or tx_id not in expected_ids or tx_id in parsed
+            or not _finite_number(probability) or not 0 <= probability <= 1
+            or not _finite_number(item.get("anomaly_score")) or type(item.get("is_anomaly")) is not bool
+            or not isinstance(reasons, list) or not all(
+                isinstance(reason, dict) and isinstance(reason.get("feature"), str)
+                and isinstance(reason.get("text"), str) and _finite_number(reason.get("impact"))
+                for reason in reasons
+            )
+        ):
+            raise ValueError("Invalid ML prediction.")
+        parsed[tx_id] = item
+    if parsed.keys() != expected_ids:
+        raise ValueError("Incomplete ML predictions.")
+    return version, parsed
+
+
+def _finite_number(value: Any) -> bool:
+    return type(value) in (float, int) and math.isfinite(value)
+
+
 def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
     """
     POST chunks of up to 200 rows to ml-service /predict with 3 retries and exponential backoff (T1.1 step 4).
@@ -142,7 +177,9 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
     token = _required_ml_token()
     headers = {"X-Internal-Token": token}
 
-    model_version = "v1"
+    if not instances:
+        raise ValueError("Prediction requires at least one instance.")
+    model_version = None
     preds_by_tx: Dict[str, Dict[str, Any]] = {}
 
     for start in range(0, len(instances), 200):
@@ -152,10 +189,13 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
             try:
                 res = httpx.post(ml_url, json={"instances": chunk}, headers=headers, timeout=10.0)
                 res.raise_for_status()
-                body = res.json()
-                model_version = body.get("model_version", "v1")
-                for p in body.get("predictions", []):
-                    preds_by_tx[p["transaction_id"]] = p
+                version, predictions = _parse_predictions(
+                    res.json(), {instance["transaction_id"] for instance in chunk}
+                )
+                if model_version is not None and version != model_version:
+                    raise ValueError("ML model changed during a batch.")
+                model_version = version
+                preds_by_tx.update(predictions)
                 last_err = None
                 break
             except Exception as exc:
@@ -284,9 +324,9 @@ def process_batch(pdf: pd.DataFrame, batch_id: int = 0) -> None:
                 tx_id = str(row["transaction_id"])
                 pred = preds_by_tx[tx_id]
                 prob = float(pred["fraud_probability"])
-                anomaly_score = float(pred.get("anomaly_score", 0.0))
-                is_anomaly = bool(pred.get("is_anomaly", False))
-                top_reasons = pred.get("top_reasons", [])
+                anomaly_score = pred["anomaly_score"]
+                is_anomaly = pred["is_anomaly"]
+                top_reasons = pred["top_reasons"]
                 risk_cat = classify_risk(prob, is_anomaly, high_thresh, low_thresh)
 
                 fr_rows.append(
@@ -304,7 +344,7 @@ def process_batch(pdf: pd.DataFrame, batch_id: int = 0) -> None:
                 if risk_cat == "HIGH_RISK":
                     high_risk_items.append((row, prob, top_reasons, model_version))
 
-            execute_values(
+            inserted_scores = execute_values(
                 cur,
                 """
                 INSERT INTO fraud_results (
@@ -312,14 +352,19 @@ def process_batch(pdf: pd.DataFrame, batch_id: int = 0) -> None:
                   risk_category, top_reasons, features, model_version
                 ) VALUES %s
                 ON CONFLICT (transaction_id) DO NOTHING
+                RETURNING transaction_id
                 """,
                 fr_rows,
+                fetch=True,
             )
 
             # Step 7: Insert HIGH_RISK alerts and publish to fraud-alerts ONLY if newly inserted
             alerts_to_publish = []
+            scored_ids = {tx_id for (tx_id,) in inserted_scores}
             for row, prob, top_reasons, m_ver in high_risk_items:
                 tx_id = str(row["transaction_id"])
+                if tx_id not in scored_ids:
+                    continue
                 cur.execute(
                     """
                     INSERT INTO alerts (transaction_id, risk_score, state)

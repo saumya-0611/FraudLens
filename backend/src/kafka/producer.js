@@ -1,6 +1,7 @@
 const { Kafka } = require('kafkajs');
 const env = require('../config/env');
 const {
+  acceptTransactionInline,
   scoreTransactionInline,
   startInlineHeartbeat,
   stopInlineHeartbeat,
@@ -48,9 +49,10 @@ async function publishTransaction(transaction) {
 
   if (isInlineMode()) {
     connected = true;
-    // Score asynchronously so POST /api/transactions returns 202 Accepted immediately
+    // Persist before acknowledging acceptance. Inference runs separately.
+    await acceptTransactionInline(message);
     setImmediate(() => {
-      scoreTransactionInline(message).catch((err) => {
+      scoreTransactionInline(message.transaction_id).catch((err) => {
         console.error('[InlineScorer] Transaction processing failed:', err.message);
       });
     });

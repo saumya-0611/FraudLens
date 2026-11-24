@@ -120,7 +120,8 @@ def test_configured_postgres_and_ml_values_are_forwarded_unchanged(monkeypatch):
     connect.assert_called_once_with(database_dsn)
     db_context.__enter__.return_value.commit.assert_called_once()
 
-    prediction = {"transaction_id": "fixture", "fraud_probability": 0.91}
+    prediction = {"transaction_id": "fixture", "fraud_probability": 0.91,
+                  "anomaly_score": 0.2, "is_anomaly": False, "top_reasons": []}
     response = Mock()
     response.json.return_value = {"model_version": "fixture-model", "predictions": [prediction]}
     post = Mock(return_value=response)
@@ -163,6 +164,52 @@ def test_worker_entrypoints_fail_before_starting_when_token_missing(monkeypatch,
     assert "Connected to Kafka" not in result.stdout
     assert "Heartbeat" not in result.stdout
     assert "Spark startup failed" not in result.stdout
+
+
+
+@pytest.mark.parametrize("patch", [
+    {"model_version": None},
+    {"predictions": []},
+    {"predictions": [{"transaction_id": "other"}]},
+    {"predictions": [{"transaction_id": "fixture", "fraud_probability": 0.9}]},
+])
+def test_invalid_predictions_fail_instead_of_fabricating_a_score(monkeypatch, patch):
+    monkeypatch.setenv("INTERNAL_ML_TOKEN", "fixture-token")
+    monkeypatch.setattr(pipeline.time, "sleep", Mock())
+    post = Mock(return_value=Mock(**{"json.return_value": {"model_version": "v1", "predictions": [], **patch}}))
+    monkeypatch.setattr(pipeline.httpx, "post", post)
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        pipeline._call_ml_service([{"transaction_id": "fixture"}])
+    assert post.call_count == 3
+
+
+def test_mixed_versions_across_chunks_fail_the_batch(monkeypatch):
+    monkeypatch.setenv("INTERNAL_ML_TOKEN", "fixture-token")
+    monkeypatch.setattr(pipeline.time, "sleep", Mock())
+    instances = [{"transaction_id": str(i)} for i in range(201)]
+
+    def response(_url, *, json, **_kwargs):
+        version = "v1" if len(json["instances"]) == 200 else "v2"
+        predictions = [{**item, "fraud_probability": 0.8, "anomaly_score": 0.2,
+                        "is_anomaly": False, "top_reasons": []} for item in json["instances"]]
+        return Mock(**{"json.return_value": {"model_version": version, "predictions": predictions}})
+
+    post = Mock(side_effect=response)
+    monkeypatch.setattr(pipeline.httpx, "post", post)
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        pipeline._call_ml_service(instances)
+    assert post.call_count == 4
+
+
+def test_prediction_parser_rejects_duplicate_ids_and_nonfinite_scores():
+    prediction = {"transaction_id": "fixture", "fraud_probability": 0.8, "anomaly_score": 0.2,
+                  "is_anomaly": False, "top_reasons": []}
+    with pytest.raises(ValueError):
+        pipeline._parse_predictions({"model_version": "v2", "predictions": [prediction, prediction]}, {"fixture"})
+    with pytest.raises(ValueError):
+        pipeline._parse_predictions(
+            {"model_version": "v2", "predictions": [{**prediction, "anomaly_score": float("nan")}]}, {"fixture"}
+        )
 
 
 if __name__ == "__main__":

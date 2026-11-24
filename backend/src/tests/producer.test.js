@@ -1,4 +1,7 @@
-﻿jest.mock('kafkajs', () => {
+jest.mock('../pipeline/inlineScorer', () => ({
+  acceptTransactionInline: jest.fn(), scoreTransactionInline: jest.fn(),
+}));
+jest.mock('kafkajs', () => {
   const send = jest.fn().mockResolvedValue(undefined);
   const connect = jest.fn().mockResolvedValue(undefined);
   const disconnect = jest.fn().mockResolvedValue(undefined);
@@ -39,5 +42,48 @@ describe('Kafka Producer Tests', () => {
     expect(messageValue.ingested_at).toBeTruthy();
     expect(new Date(messageValue.ingested_at).toISOString())
       .toBe(messageValue.ingested_at);
+  });
+});
+
+describe('inline routing', () => {
+  const { acceptTransactionInline, scoreTransactionInline } = require('../pipeline/inlineScorer');
+  const transaction = { transaction_id: 'inline-fixture' };
+  let previousMode;
+
+  beforeEach(() => {
+    previousMode = process.env.PIPELINE_MODE;
+    process.env.PIPELINE_MODE = 'inline';
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (previousMode === undefined) delete process.env.PIPELINE_MODE;
+    else process.env.PIPELINE_MODE = previousMode;
+  });
+
+  test('waits for durable acceptance before acknowledging and schedules one score without Kafka', async () => {
+    let persisted;
+    acceptTransactionInline.mockReturnValueOnce(new Promise((resolve) => { persisted = resolve; }));
+    scoreTransactionInline.mockResolvedValueOnce(undefined);
+    const acknowledgement = jest.fn();
+    const request = publishTransaction(transaction).then(acknowledgement);
+    expect(acceptTransactionInline).toHaveBeenCalledWith(expect.objectContaining(transaction));
+    expect(acknowledgement).not.toHaveBeenCalled();
+    expect(scoreTransactionInline).not.toHaveBeenCalled();
+    persisted();
+    await request;
+    await new Promise(setImmediate);
+    expect(scoreTransactionInline).toHaveBeenCalledTimes(1);
+    expect(scoreTransactionInline).toHaveBeenCalledWith(transaction.transaction_id);
+    expect(__mock.connect).not.toHaveBeenCalled();
+    expect(__mock.send).not.toHaveBeenCalled();
+  });
+
+  test('failed persistence rejects acceptance and never schedules a score', async () => {
+    acceptTransactionInline.mockRejectedValueOnce(new Error('fixture database failure'));
+    await expect(publishTransaction(transaction)).rejects.toThrow('fixture database failure');
+    await new Promise(setImmediate);
+    expect(scoreTransactionInline).not.toHaveBeenCalled();
+    expect(__mock.send).not.toHaveBeenCalled();
   });
 });

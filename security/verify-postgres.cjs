@@ -58,8 +58,8 @@ async function main() {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
       model_version: 'fixture-v1',
       predictions: instances.map(({ transaction_id }) => ({
-        transaction_id, fraud_probability: 0.99, is_anomaly: true,
-        top_reasons: [{ feature: 'amount', metadata: { account_ref: fixtureAccount, weight: 1 } }],
+        transaction_id, fraud_probability: 0.99, anomaly_score: 0.85, is_anomaly: true,
+        top_reasons: [{ feature: 'amount', text: 'Fixture amount', impact: 1, metadata: { account_ref: fixtureAccount, weight: 1 } }],
       })),
     }));
   });

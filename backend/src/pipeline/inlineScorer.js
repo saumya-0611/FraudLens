@@ -8,9 +8,9 @@
  * writes the hash-chained ALERT_RAISED audit row, and broadcasts over /ws/alerts.
  */
 const env = require('../config/env');
-const { query } = require('../config/db');
-const { audit } = require('../audit/auditLogger');
-const { broadcastAlert, sanitizeAlert } = require('../websocket/alertSocket');
+const { pool, query } = require('../config/db');
+const { appendAudit } = require('../audit/auditLogger');
+const { broadcastAlert } = require('../websocket/alertSocket');
 const { maskAccount } = require('../utils/mask');
 
 const CATEGORY_MAP = {
@@ -143,61 +143,7 @@ function stopInlineHeartbeat() {
   }
 }
 
-async function scoreTransactionInline(tx) {
-  const ingestedAt = tx.ingested_at || new Date().toISOString();
-
-  // 1. Load latest 50 prior transactions for account lookback
-  const histRes = await query(
-    `SELECT transaction_id, amount, tx_time
-     FROM transactions
-     WHERE account_ref = $1
-     ORDER BY tx_time DESC
-     LIMIT 50`,
-    [String(tx.account_ref)]
-  );
-
-  const features = computeFeatures(tx, histRes.rows || []);
-
-  // 2. Call ml-service /predict with X-Internal-Token
-  const mlBase = (env.mlServiceUrl || 'http://localhost:8000').replace(/\/+$/, '');
-  const headers = { 'Content-Type': 'application/json' };
-  if (env.internalMlToken) headers['X-Internal-Token'] = env.internalMlToken;
-
-  let modelVersion = 'v1';
-  let fraudProbability = 0.01;
-  let anomalyScore = 0.0;
-  let isAnomaly = false;
-  let topReasons = [];
-
-  try {
-    const res = await fetch(`${mlBase}/predict`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        instances: [{ transaction_id: String(tx.transaction_id), features }],
-      }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
-    });
-    if (res.ok) {
-      const payload = await res.json();
-      modelVersion = payload.model_version || 'v1';
-      const pred = (payload.predictions || [])[0];
-      if (pred) {
-        fraudProbability = Number(pred.fraud_probability ?? 0.01);
-        anomalyScore = Number(pred.anomaly_score ?? 0.0);
-        isAnomaly = Boolean(pred.is_anomaly);
-        topReasons = Array.isArray(pred.top_reasons) ? pred.top_reasons : [];
-      }
-    } else {
-      console.error(`[InlineScorer] ML /predict returned HTTP ${res.status}`);
-    }
-  } catch (err) {
-    console.error('[InlineScorer] ML /predict failed:', err.message);
-  }
-
-  const riskCategory = classifyRisk(fraudProbability, isAnomaly);
-
-  // 3. Persist transaction + fraud_result idempotently
+async function acceptTransactionInline(tx) {
   await query(
     `INSERT INTO transactions (
        transaction_id, account_ref, amount, tx_time, category, merchant,
@@ -205,96 +151,142 @@ async function scoreTransactionInline(tx) {
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (transaction_id) DO NOTHING`,
     [
-      String(tx.transaction_id),
-      String(tx.account_ref),
-      Number(tx.amount),
-      tx.tx_time,
-      String(tx.category),
-      tx.merchant || null,
-      tx.lat ?? null,
-      tx.lon ?? null,
-      tx.merch_lat ?? null,
-      tx.merch_lon ?? null,
-      tx.customer_age ?? null,
-      ingestedAt,
+      tx.transaction_id, tx.account_ref, tx.amount, tx.tx_time, tx.category, tx.merchant || null,
+      tx.lat ?? null, tx.lon ?? null, tx.merch_lat ?? null, tx.merch_lon ?? null,
+      tx.customer_age ?? null, tx.ingested_at,
     ]
   );
+}
 
-  await query(
-    `INSERT INTO fraud_results (
-       transaction_id, fraud_probability, anomaly_score, is_anomaly,
-       risk_category, top_reasons, features, model_version, scored_at
-     ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,NOW())
-     ON CONFLICT (transaction_id) DO NOTHING`,
-    [
-      String(tx.transaction_id),
-      fraudProbability,
-      anomalyScore,
-      isAnomaly,
-      riskCategory,
-      JSON.stringify(topReasons),
-      JSON.stringify(features),
-      modelVersion,
-    ]
-  );
+async function predict(transactionId, features) {
+  const mlBase = env.mlServiceUrl.replace(/\/+$/, '');
+  const headers = { 'Content-Type': 'application/json' };
+  if (env.internalMlToken) headers['X-Internal-Token'] = env.internalMlToken;
+  const response = await fetch(`${mlBase}/predict`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ instances: [{ transaction_id: transactionId, features }] }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('ML returned an unsuccessful response.');
 
-  // 4. Create alert, append hash-chained audit row, and broadcast on HIGH_RISK
-  if (riskCategory === 'HIGH_RISK') {
-    const alertRes = await query(
-      `INSERT INTO alerts (transaction_id, risk_score, state)
-       VALUES ($1, $2, 'NEW')
+  const payload = await response.json();
+  const modelVersion = payload?.model_version;
+  const predictions = payload?.predictions;
+  const result = Array.isArray(predictions) && predictions.length === 1 ? predictions[0] : undefined;
+  if (typeof modelVersion !== 'string' || !modelVersion.trim() || modelVersion.length > 30 ||
+      result?.transaction_id !== transactionId ||
+      !Number.isFinite(result.fraud_probability) || result.fraud_probability < 0 || result.fraud_probability > 1 ||
+      !Number.isFinite(result.anomaly_score) || typeof result.is_anomaly !== 'boolean' ||
+      !Array.isArray(result.top_reasons) || !result.top_reasons.every((reason) =>
+        reason && typeof reason.feature === 'string' && typeof reason.text === 'string' && Number.isFinite(reason.impact))) {
+    throw new Error('ML returned an invalid prediction.');
+  }
+  return { ...result, model_version: modelVersion };
+}
+
+async function persistScore(tx, features, prediction) {
+  const { fraud_probability, anomaly_score, is_anomaly, top_reasons, model_version } = prediction;
+  const category = classifyRisk(fraud_probability, is_anomaly);
+  const client = await pool.connect();
+  let discard;
+  try {
+    await client.query('BEGIN');
+    const { rows: [score] } = await client.query(
+      `INSERT INTO fraud_results (
+         transaction_id, fraud_probability, anomaly_score, is_anomaly, risk_category,
+         top_reasons, features, model_version
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)
        ON CONFLICT (transaction_id) DO NOTHING
-       RETURNING alert_id, created_at`,
-      [String(tx.transaction_id), fraudProbability]
+       RETURNING fraud_probability, risk_category`,
+      [tx.transaction_id, fraud_probability, anomaly_score, is_anomaly, category,
+        JSON.stringify(top_reasons), JSON.stringify(features), model_version]
     );
-    const created = alertRes.rows && alertRes.rows[0];
-    if (created) {
-      const alertObj = sanitizeAlert({
-        alert_id: created.alert_id,
-        transaction_id: String(tx.transaction_id),
-        account_masked: maskAccount(String(tx.account_ref)),
-        amount: Number(tx.amount),
-        category: String(tx.category),
-        risk_score: fraudProbability,
-        risk_category: riskCategory,
-        top_reasons: topReasons,
-        model_version: modelVersion,
-        created_at: created.created_at instanceof Date
-          ? created.created_at.toISOString()
-          : new Date().toISOString(),
-      });
 
-      try {
-        await audit({
-          userId: null,
-          username: 'system',
-          action: 'ALERT_RAISED',
-          entity: 'alert',
-          entityId: String(created.alert_id),
+    let alert;
+    if (score?.risk_category === 'HIGH_RISK') {
+      const { rows: [created] } = await client.query(
+        `INSERT INTO alerts (transaction_id, risk_score, state)
+         VALUES ($1, $2, 'NEW')
+         ON CONFLICT (transaction_id) DO NOTHING
+         RETURNING alert_id, created_at`,
+        [tx.transaction_id, score.fraud_probability]
+      );
+      if (created) {
+        alert = {
+          alert_id: created.alert_id,
+          transaction_id: tx.transaction_id,
+          account_masked: maskAccount(tx.account_ref),
+          amount: Number(tx.amount),
+          category: tx.category,
+          risk_score: score.fraud_probability,
+          risk_category: score.risk_category,
+          top_reasons,
+          model_version,
+          created_at: created.created_at.toISOString(),
+        };
+        await appendAudit(client, {
+          action: 'ALERT_RAISED', entity: 'alert', entityId: String(alert.alert_id),
           details: {
-            transaction_id: alertObj.transaction_id,
-            risk_score: alertObj.risk_score,
-            risk_category: alertObj.risk_category,
-            amount: alertObj.amount,
-            category: alertObj.category,
+            transaction_id: alert.transaction_id, risk_score: alert.risk_score,
+            risk_category: alert.risk_category, amount: alert.amount, category: alert.category,
           },
         });
-      } catch (err) {
-        console.error('[InlineScorer] Audit log failed:', err.message);
-      }
-
-      try {
-        broadcastAlert(alertObj);
-      } catch (err) {
-        console.error('[InlineScorer] WebSocket broadcast warning:', err.message);
       }
     }
+
+    await client.query('COMMIT');
+    return alert;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      discard = rollbackError;
+    }
+    throw error;
+  } finally {
+    client.release(discard);
+  }
+}
+
+async function scoreTransactionInline(transactionId) {
+  const { rows: [tx] } = await query(
+    `SELECT t.*, EXISTS (SELECT 1 FROM fraud_results WHERE transaction_id = t.transaction_id) AS scored
+     FROM transactions t WHERE t.transaction_id = $1`,
+    [transactionId]
+  );
+  if (!tx || tx.scored) return;
+
+  // Replays always use the first accepted payload stored under this transaction ID.
+  const { rows: history } = await query(
+    `SELECT transaction_id, amount, tx_time FROM transactions
+     WHERE account_ref = $1 AND transaction_id <> $2 AND tx_time <= $3
+     ORDER BY tx_time DESC LIMIT 50`,
+    [tx.account_ref, tx.transaction_id, tx.tx_time]
+  );
+  const features = computeFeatures(tx, history);
+
+  let prediction;
+  try {
+    prediction = await predict(transactionId, features);
+  } catch {
+    console.warn('[InlineScorer] Inference did not complete. Transaction remains unscored unless another attempt commits.');
+    return;
   }
 
+  const alert = await persistScore(tx, features, prediction);
+  if (alert) {
+    try {
+      await broadcastAlert(alert);
+    } catch (error) {
+      console.warn('[InlineScorer] WebSocket broadcast warning:', error.message);
+    }
+  }
   await touchStreamingHeartbeat();
 }
 
 module.exports = {
+  acceptTransactionInline,
   scoreTransactionInline,
   computeFeatures,
   classifyRisk,
