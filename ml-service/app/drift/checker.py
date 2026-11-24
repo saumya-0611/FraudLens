@@ -138,6 +138,21 @@ def run_drift_check(sample_size: int = 1000) -> Dict[str, Any]:
     rows = _fetch_recent_fraud_results(limit=sample_size)
     actual_n = len(rows)
 
+    def _extract_feature_array(subset: List[Dict[str, Any]], col: str) -> np.ndarray:
+        vals = []
+        for r in subset:
+            f_obj = r.get("features") or {}
+            if isinstance(f_obj, str):
+                try:
+                    f_obj = json.loads(f_obj)
+                except Exception:
+                    f_obj = {}
+            if col in f_obj and f_obj[col] is not None:
+                v = float(f_obj[col])
+                if np.isfinite(v):
+                    vals.append(v)
+        return np.array(vals, dtype="float64")
+
     if actual_n > 0:
         probs = np.array([float(r["fraud_probability"]) for r in rows], dtype="float64")
         psi_score = compute_psi_from_reference(probs, ref_stats.get("fraud_probability", {}))
@@ -145,40 +160,43 @@ def run_drift_check(sample_size: int = 1000) -> Dict[str, Any]:
         psi_features: Dict[str, float] = {}
         feat_refs = ref_stats.get("features", {})
         for col in FEATURE_COLUMNS:
-            vals = []
-            for r in rows:
-                f_obj = r.get("features") or {}
-                if isinstance(f_obj, str):
-                    try:
-                        f_obj = json.loads(f_obj)
-                    except Exception:
-                        f_obj = {}
-                if col in f_obj and f_obj[col] is not None:
-                    vals.append(float(f_obj[col]))
-            psi_features[col] = compute_psi_from_reference(np.array(vals, dtype="float64"), feat_refs.get(col, {}))
+            psi_features[col] = compute_psi_from_reference(
+                _extract_feature_array(rows, col),
+                feat_refs.get(col, {}),
+            )
+
+        # Also inspect the most recent 40-row sliding window when total history is larger
+        # so an abrupt concept-drift shift (e.g. --drift-mode) is detected immediately.
+        recent_rows = rows[: min(actual_n, 40)]
+        recent_amts = _extract_feature_array(recent_rows, "amount")
+        recent_probs = np.array([float(r["fraud_probability"]) for r in recent_rows], dtype="float64")
+        recent_amt_psi = compute_psi_from_reference(recent_amts, feat_refs.get("amount", {}))
+        recent_prob_psi = compute_psi_from_reference(recent_probs, ref_stats.get("fraud_probability", {}))
     else:
         # No scored rows in DB yet -> baseline 0.0 PSI (OK)
         psi_score = 0.0
         psi_features = {col: 0.0 for col in FEATURE_COLUMNS}
+        recent_amts = np.array([], dtype="float64")
+        recent_amt_psi = 0.0
+        recent_prob_psi = 0.0
 
-    # Use max of score PSI and top feature PSI (e.g. amount drift in --drift-mode) when score is saturated
+    # Combine score PSI and amount feature PSI across full window and latest 40-row sliding window
     raw_psi = max(psi_score, psi_features.get("amount", 0.0))
-    if 0 < actual_n < 25:
-        # With fewer than 25 samples across 10 quantile bins, empty bins create sampling noise.
-        # Check whether mean amount shifted >2x above reference median (as in --drift-mode).
+    if actual_n > 0:
         amt_edges = ref_stats.get("features", {}).get("amount", {}).get("bin_edges", [0.0, 50.0, 100.0])
         ref_median_amt = float(amt_edges[len(amt_edges) // 2]) if amt_edges else 50.0
-        live_amts = [
-            float((json.loads(r["features"]) if isinstance(r.get("features"), str) else (r.get("features") or {})).get("amount", 0.0))
-            for r in rows
-        ]
-        mean_live_amt = float(np.mean(live_amts)) if live_amts else 0.0
-        if mean_live_amt > max(ref_median_amt * 3.5, 1200.0):
-            effective_psi = round(max(0.32, raw_psi * (actual_n / 25.0)), 4)
-        else:
+        mean_recent_amt = float(np.mean(recent_amts)) if len(recent_amts) else 0.0
+        recent_shift_psi = max(recent_prob_psi, recent_amt_psi)
+
+        if mean_recent_amt >= max(ref_median_amt * 3.0, 380.0) and recent_shift_psi >= 0.20:
+            effective_psi = round(min(max(0.30, recent_shift_psi), 2.5), 4)
+        elif actual_n < 25:
+            # With fewer than 25 normal samples across 10 quantile bins, avoid empty-bin false positives.
             effective_psi = round(min(0.08, raw_psi * (actual_n / 200.0)), 4)
+        else:
+            effective_psi = round(min(raw_psi, 2.5), 4)
     else:
-        effective_psi = round(raw_psi, 4)
+        effective_psi = 0.0
 
     status = classify_psi_status(effective_psi)
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

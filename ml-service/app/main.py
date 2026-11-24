@@ -12,7 +12,7 @@ Implements CONTRACTS.md Section 6 (Phase 2 & Phase 3 real ML lifecycle):
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.drift.checker import get_latest_drift_report, run_drift_check
@@ -96,7 +96,7 @@ def list_models() -> Dict[str, Any]:
 
 
 @app.post("/drift/check", dependencies=[Depends(verify_internal_token)])
-def drift_check(sample_size: int = 1000) -> Dict[str, Any]:
+def drift_check(sample_size: int = Query(default=1000, ge=1, le=10000)) -> Dict[str, Any]:
     """Compute PSI on the last N scored rows vs reference_stats.json and store in drift_reports (T3.1)."""
     return run_drift_check(sample_size=sample_size)
 
