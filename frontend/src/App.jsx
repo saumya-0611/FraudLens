@@ -11,6 +11,7 @@ import DashboardLayout from "./layouts/DashboardLayout";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import { useAuth } from "./hooks/useAuth";
+import LandingPage from "./pages/LandingPage";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Transactions = lazy(() => import("./pages/Transactions"));
 const Alerts = lazy(() => import("./pages/Alerts"));
@@ -31,7 +32,7 @@ function LoginPage() {
     const [message, setMessage] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
-    const { login, user, loading } = useAuth();
+    const { login, user, loading, authError } = useAuth();
     const navigate = useNavigate();
 
     // Handle login form submission.
@@ -59,11 +60,6 @@ function LoginPage() {
         } finally {
             setSubmitting(false);
         }
-    };
-
-    // These buttons are visual demo placeholders; no OAuth flow is connected.
-    const handleSocialLogin = (provider) => {
-        setMessage(`${provider} sign-in is a demo placeholder; OAuth is not connected.`);
     };
 
     // Wait until the existing session check finishes.
@@ -193,6 +189,7 @@ function LoginPage() {
 
                                 <input
                                     id="username"
+                                    name="username"
                                     type="text"
                                     placeholder="Enter your username"
                                     value={username}
@@ -215,6 +212,7 @@ function LoginPage() {
                                 <div className="password-wrapper">
                                     <input
                                         id="password"
+                                        name="password"
                                         type={showPassword ? "text" : "password"}
                                         placeholder="Enter your password"
                                         value={password}
@@ -246,37 +244,16 @@ function LoginPage() {
                                 type="submit"
                                 disabled={submitting}
                             >
-                                {submitting ? "Signing in..." : "Sign in"}
+                                {submitting ? "Signing in..." : "Sign In"}
                                 <span>→</span>
                             </button>
 
-                            {message && (
-                                <div className="form-message" role="status">
-                                    {message}
+                            {(message || authError) && (
+                                <div className="form-message" role={message ? "status" : "alert"}>
+                                    {message || authError}
                                 </div>
                             )}
                         </form>
-
-                        <div className="divider">
-                            <span />
-                            <p>DEMO PLACEHOLDERS · OAUTH NOT CONNECTED</p>
-                            <span />
-                        </div>
-
-                        <div className="social-grid">
-                            <button type="button" onClick={() => handleSocialLogin("Google")}>
-                                <span className="social-icon google-icon">G</span>Google
-                            </button>
-                            <button type="button" onClick={() => handleSocialLogin("GitHub")}>
-                                <span className="social-icon github-icon">GH</span>GitHub
-                            </button>
-                            <button type="button" onClick={() => handleSocialLogin("Facebook")}>
-                                <span className="social-icon facebook-icon">f</span>Facebook
-                            </button>
-                            <button type="button" onClick={() => handleSocialLogin("X")}>
-                                <span className="social-icon x-icon">𝕏</span>X
-                            </button>
-                        </div>
 
                         <p className="account-note">
                             Access is provided by your Fraud Lens administrator.
@@ -304,7 +281,8 @@ function AppRoutes() {
     return (
         <Suspense fallback={<div className="preview-page">Loading workspace…</div>}>
         <Routes>
-            {/* Public login page */}
+            {/* Public landing and login pages */}
+            <Route path="/home" element={<LandingPage />} />
             <Route path="/" element={<LoginPage />} />
 
             {/* All authenticated users */}

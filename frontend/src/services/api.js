@@ -1,71 +1,88 @@
+const mocksConfigured = import.meta.env.VITE_USE_MOCKS === "true";
 
-/*
-  Central API service for Fraud Lens.
+if (import.meta.env.PROD && mocksConfigured) {
+    throw new Error("Mock mode is development-only. Set VITE_USE_MOCKS=false for production.");
+}
 
-  All frontend API requests go through this file.
-  Mock mode and real backend mode use the same request function.
-*/
+const USE_MOCKS = import.meta.env.DEV && mocksConfigured;
+const PUBLIC_AUTH_ENDPOINTS = new Set(["/api/auth/login", "/api/auth/me"]);
+const PUBLIC_ROUTES = new Set(["/", "/home"]);
 
-import { mockRequest } from "../mocks/mockApi";
+function createApiError(code, message, requestId = null) {
+    return { code, message, request_id: requestId };
+}
 
-// Check whether mock mode is enabled in the environment.
-const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === "true";
+async function parseResponse(response) {
+    if (response.status === 204) return null;
+
+    const responseText = await response.text();
+    if (!responseText) return null;
+
+    try {
+        return JSON.parse(responseText);
+    } catch {
+        return null;
+    }
+}
 
 export async function request(path, options = {}) {
-    // Use local mock responses during frontend development.
     if (USE_MOCKS) {
         try {
+            const { mockRequest } = await import("../mocks/mockApi");
             return await mockRequest(path, options);
         } catch (error) {
-            // Keep mock errors in the same format as backend errors.
-            throw error.data?.error || {
-                code: "MOCK_ERROR",
-                message: error.message || "Mock request failed.",
-                request_id: null,
-            };
+            throw error.data?.error || createApiError(
+                "MOCK_ERROR",
+                error.message || "Mock request failed.",
+            );
         }
     }
 
-    // Otherwise, send the request to the real backend.
-    const response = await fetch(path, {
-        ...options,
-
-        // Include the authentication cookie with every request.
-        credentials: "include",
-
-        headers: {
-            "Content-Type": "application/json",
-            ...options.headers,
-        },
-    });
-
-    // Redirect to login when the session has expired.
-    if (response.status === 401 &&
-        path !== "/api/auth/login" && path !== "/api/auth/me") {
-        window.location.assign("/");
-
-        throw {
-            code: "UNAUTHORIZED",
-            message: "Your session has expired. Please log in again.",
-            request_id: null,
-        };
+    let response;
+    try {
+        response = await fetch(path, {
+            ...options,
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+                ...options.headers,
+            },
+        });
+    } catch (error) {
+        throw createApiError(
+            "BACKEND_UNAVAILABLE",
+            error.name === "AbortError"
+                ? "The FraudLens request timed out. Please try again."
+                : "Cannot reach the FraudLens backend. Check the service and API proxy, then try again.",
+        );
     }
 
-    // A 204 response has no response body.
-    if (response.status === 204) {
-        return null;
+    const data = await parseResponse(response);
+
+    if (response.status === 401) {
+        const endpoint = new URL(path, window.location.origin).pathname;
+        const isPublicEndpoint = PUBLIC_AUTH_ENDPOINTS.has(endpoint);
+        const isPublicRoute = PUBLIC_ROUTES.has(window.location.pathname);
+
+        // Login failures and initial session checks must be rendered in place.
+        // Only expire navigation when a protected screen loses its session.
+        if (!isPublicEndpoint && !isPublicRoute) {
+            window.location.replace("/");
+        }
+
+        throw data?.error || createApiError(
+            "UNAUTHORIZED",
+            isPublicEndpoint
+                ? "Authentication was not accepted. Please try again."
+                : "Your session has expired. Please log in again.",
+        );
     }
 
-    // Read the backend response.
-    const data = await response.json();
-
-    // Return the backend's standard error object.
     if (!response.ok) {
-        throw data.error || {
-            code: "REQUEST_FAILED",
-            message: "The request could not be completed.",
-            request_id: null,
-        };
+        throw data?.error || createApiError(
+            "REQUEST_FAILED",
+            "The request could not be completed.",
+        );
     }
 
     return data;

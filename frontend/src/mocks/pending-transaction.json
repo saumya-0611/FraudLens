@@ -5,10 +5,14 @@
   "amount": 720.0,
   "category": "food",
   "merchant": "Example Food Store",
-  "tx_time": "2026-11-20T03:15:45Z",
   "risk_category": "PENDING",
   "fraud_probability": null,
   "is_anomaly": false,
   "model_version": null,
+  "timestamps": {
+    "tx_time": "2026-11-20T03:15:45Z",
+    "ingested_at": "2026-11-20T03:15:45.412Z",
+    "scored_at": null
+  },
   "alert": null
 }
