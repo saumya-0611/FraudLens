@@ -303,10 +303,17 @@ function LoginPage() {
                                 <span className="social-icon linkedin-icon" aria-hidden="true">in</span>
                                 {providers.linkedin ? "LinkedIn" : "LinkedIn unavailable"}
                             </button>
+                            <button
+                                type="button"
+                                disabled={!providers.github}
+                                onClick={() => window.location.assign("/api/auth/github/start")}
+                            >
+                                {providers.github ? "GitHub" : "GitHub unavailable"}
+                            </button>
                         </div>
 
                         <p className="account-note">
-                            {providers.google || providers.linkedin
+                            {providers.google || providers.linkedin || providers.github
                                 ? "New social accounts start with Viewer access."
                                 : "Access is provided by your Fraud Lens administrator."}
                         </p>

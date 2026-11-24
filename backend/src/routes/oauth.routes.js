@@ -6,13 +6,18 @@ const { getSessionUser } = authenticate;
 const { audit } = require('../audit/auditLogger');
 const { issueSession } = require('../auth/session');
 const { enabledProviders, providerClient } = require('../auth/oidc');
+const { enabledGitHub, createGitHubClient } = require('../auth/githubOAuth');
 const store = require('../auth/oauthStore');
 
 const providers = enabledProviders();
+const github = enabledGitHub();
+if (github) providers.github = github;
+
+const getClient = (provider) => provider.name === 'github' ? createGitHubClient(provider) : providerClient(provider);
 const statePattern = /^[A-Za-z0-9_-]{43}$/;
 const random = () => randomBytes(32).toString('base64url');
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const names = ['google', 'linkedin'];
+const names = ['google', 'linkedin', 'github'];
 const startLimiter = rateLimit({
   windowMs: 60_000,
   limit: 20,
@@ -47,7 +52,7 @@ async function record(req, provider, action, user, details = {}) {
       req, action, entity: 'USER',
       userId: user?.id, username: user?.username,
       entityId: user ? String(user.id) : null,
-      details: { provider: provider.name, authentication: 'oidc', ...details },
+      details: { provider: provider.name, authentication: provider.name === 'github' ? 'oauth' : 'oidc', ...details },
     });
   } catch {
     console.error('OAuth audit write failed.');
@@ -56,9 +61,10 @@ async function record(req, provider, action, user, details = {}) {
 
 router.get('/providers', async (_req, res) => {
   protectResponse(res);
-  const configured = Object.keys(providers);
-  const ready = configured.length > 0 && await store.ready().catch(() => false);
-  res.json(Object.fromEntries(names.map((name) => [name, ready && Object.hasOwn(providers, name)])));
+  const availability = await Promise.all(names.map(async (name) => [
+    name, Object.hasOwn(providers, name) && await store.ready(name).catch(() => false),
+  ]));
+  res.json(Object.fromEntries(availability));
 });
 
 async function start(req, res, linking) {
@@ -71,12 +77,12 @@ async function start(req, res, linking) {
     });
   }
   try {
-    if (!await store.ready()) return result(res, 'unavailable');
+    if (!await store.ready(provider.name)) return result(res, 'unavailable');
     const sessionToken = linking ? req.cookies?.fl_token : null;
     if (linking && typeof sessionToken !== 'string') return result(res, 'state');
     const state = random();
     const browserProof = random();
-    const client = await providerClient(provider);
+    const client = await getClient(provider);
     const { location, nonce, verifier } = await client.begin(state);
     await store.saveAttempt({
       stateHash: hash(state), browserHash: hash(browserProof),
@@ -124,7 +130,7 @@ router.get('/:provider/callback', async (req, res) => {
     callback.searchParams.set('state', state);
     callback.searchParams.set('code', code);
     if (iss !== undefined) callback.searchParams.set('iss', iss);
-    const client = await providerClient(provider);
+    const client = await getClient(provider);
     const identity = await client.verify(callback, { ...attempt, state });
     const { kind, user } = await store.resolveIdentity(identity, attempt.link_user_id);
     if (kind === 'disabled' || kind === 'conflict') {
@@ -140,7 +146,7 @@ router.get('/:provider/callback', async (req, res) => {
     issueSession(res, user);
     return res.redirect(303, '/dashboard');
   } catch {
-    if (attempt) await record(req, provider, 'LOGIN_FAILURE', null, { reason: 'oidc_failure' });
+    if (attempt) await record(req, provider, 'LOGIN_FAILURE', null, { reason: provider.name === 'github' ? 'oauth_failure' : 'oidc_failure' });
     return result(res, 'provider');
   }
 });
