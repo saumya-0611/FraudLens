@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Tuple
 import httpx
 import pandas as pd
 import psycopg2
+from psycopg2.extensions import parse_dsn
 from psycopg2.extras import execute_values
 
 from shared.fraud_features import FEATURE_COLUMNS, build_features
@@ -25,6 +26,33 @@ REQUIRED_FIELDS = ("transaction_id", "account_ref", "amount", "tx_time", "catego
 THRESHOLDS_PATH = Path(__file__).resolve().parents[2] / "shared" / "thresholds.json"
 
 _producer: Any = None
+
+
+def _required_database_url() -> str:
+    value = os.getenv("DATABASE_URL", "").strip()
+    if not value:
+        raise RuntimeError("DATABASE_URL must be explicitly configured for streaming.")
+    try:
+        settings = parse_dsn(value)
+    except psycopg2.ProgrammingError:
+        raise RuntimeError("DATABASE_URL is invalid; configure a PostgreSQL connection string.") from None
+    if not (settings.get("host") or settings.get("hostaddr")) or not settings.get("dbname") or not settings.get("user"):
+        raise RuntimeError("DATABASE_URL must specify a PostgreSQL host, database and user.")
+    return value
+
+
+def _required_ml_token() -> str:
+    token = os.getenv("INTERNAL_ML_TOKEN", "")
+    if not token or token != token.strip() or any(not 32 <= ord(char) <= 126 for char in token):
+        raise RuntimeError("INTERNAL_ML_TOKEN must be explicitly configured as a valid HTTP header value.")
+    return token
+
+
+def validate_runtime_config() -> str:
+    """Check required streaming settings before opening a network connection."""
+    database_url = _required_database_url()
+    _required_ml_token()
+    return database_url
 
 
 def get_kafka_producer() -> Any:
@@ -111,7 +139,7 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
     Raises on persistent failure so the batch is not committed and will be retried.
     """
     ml_url = os.getenv("ML_SERVICE_URL", "http://ml-service:8000").rstrip("/") + "/predict"
-    token = os.getenv("INTERNAL_ML_TOKEN", "fl_internal_ml_token_2026")
+    token = _required_ml_token()
     headers = {"X-Internal-Token": token}
 
     model_version = "v1"
@@ -135,14 +163,14 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
                 if attempt < 3:
                     time.sleep(0.5 * (2 ** (attempt - 1)))
         if last_err is not None:
-            raise RuntimeError(f"ml-service /predict failed after 3 attempts: {last_err}") from last_err
+            raise RuntimeError("ml-service /predict failed after 3 attempts.") from None
 
     return model_version, preds_by_tx
 
 
 def process_batch(pdf: pd.DataFrame, batch_id: int = 0) -> None:
     """Process one micro-batch of transactions end-to-end (T1.1 steps 1-8)."""
-    db_url = os.getenv("DATABASE_URL", "postgresql://fraudlens:change_me@postgres:5432/fraudlens")
+    db_url = validate_runtime_config()
 
     with psycopg2.connect(db_url) as conn:
         with conn.cursor() as cur:

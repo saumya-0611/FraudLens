@@ -12,7 +12,9 @@ const { setTimeout: pause } = require('node:timers/promises');
 const db = new URL(process.env.DATABASE_URL || '');
 assert.equal(db.protocol, 'postgresql:');
 assert.equal(db.hostname, '127.0.0.1');
-assert.equal(db.pathname, '/fraudlens_phase2_browser');
+assert.match(db.pathname, /^\/fraudlens_phase2_browser(?:_[a-f0-9]{16})?$/);
+assert(db.port && !db.search && !db.hash, 'Use an explicit disposable port and a URL without options.');
+process.env.DATABASE_URL_UNPOOLED = process.env.DATABASE_URL;
 assert(process.env.FRAUDLENS_CHROME, 'Set FRAUDLENS_CHROME to the local Chrome executable.');
 
 const backend = path.resolve(__dirname, '../backend');
@@ -107,6 +109,11 @@ async function verify() {
   assert.equal(initial.count, '0', 'Use a fresh disposable browser database.');
   const seeded = spawnSync(process.execPath, ['scripts/seed.js'], { cwd: backend, encoding: 'utf8' });
   assert.equal(seeded.status, 0, seeded.stderr);
+  await query(
+    "INSERT INTO transactions (transaction_id, account_ref, amount, tx_time, category, ingested_at) " +
+    "VALUES ($1, $2, 19.95, now(), 'retail', now())",
+    ['browser-fixture-tx', 'browser-fixture-account-8765']
+  );
   const tempRoot = await fs.realpath(os.tmpdir());
   const profile = await fs.mkdtemp(path.join(tempRoot, 'fraudlens-check-chrome-'));
   const server = root.listen(0, '127.0.0.1');
@@ -196,6 +203,14 @@ async function verify() {
     await eventually(() => evaluate('location.pathname === "/dashboard"'));
     assert.equal(await evaluate('fetch("/api/auth/me").then(r => r.json()).then(r => r.role)'), 'VIEWER');
     assert.equal(await evaluate('fetch("/api/users").then(r => r.status)'), 403);
+    assert.equal(await evaluate('fetch("/api/alerts").then(r => r.status)'), 403);
+    for (const route of ['/api/transactions?q=browser-fixture-tx', '/api/transactions/browser-fixture-tx']) {
+      const result = await evaluate('fetch(' + JSON.stringify(route) + ').then(async r => [r.status, await r.text()])');
+      assert.equal(result[0], 200);
+      assert(result[1].includes('XXXX-8765'));
+      assert(!result[1].includes('account_ref'));
+      assert(!result[1].includes('browser-fixture-account-8765'));
+    }
     const { cookies } = await command('Network.getCookies', { urls: [origin] });
     const session = cookies.find(({ name }) => name === 'fl_token');
     assert.equal(session?.httpOnly, true);
@@ -215,7 +230,7 @@ async function verify() {
     await evaluate('[...document.querySelectorAll("button")].find(b => b.textContent.includes("Sign out")).click()');
     await eventually(() => evaluate('location.pathname === "/" && Boolean(document.querySelector("#username"))'));
     assert.equal(await evaluate('fetch("/api/auth/me").then(r => r.status)'), 401);
-    console.log(`PASS: Chrome via ${openssl ? 'Nginx HTTPS' : 'loopback HTTP'} sign-in, masked live alert, cookie flags, VIEWER denial in UI and API, and sign-out`);
+    console.log(`PASS: Chrome via ${openssl ? 'Nginx HTTPS' : 'loopback HTTP'} sign-in, masked transaction reads and live alert, cookie flags, VIEWER denial in UI and API, and sign-out`);
   } finally {
     socket?.close();
     if (browser && browser.exitCode === null && browser.pid) {
