@@ -1,9 +1,16 @@
-# Render Cloud Deployment Blueprint for FraudLens (BhashaFlow-style Cloud Architecture)
-# Deploys:
-#   1. fraudlens-db         (Managed PostgreSQL 16)
-#   2. fraudlens-ml-service (Private Docker Web Service, FastAPI :8000)
-#   3. fraudlens-backend    (Public Docker Web Service, Node/Express :5000)
-#   4. fraudlens-streaming  (Docker Background Worker, PySpark/Kafka pipeline)
+# Render 100% Free-Tier Cloud Deployment Blueprint for FraudLens (BhashaFlow-style)
+#
+# Deploys for $0/month on Render Free Tier + Vercel Free Tier + UptimeRobot:
+#   1. fraudlens-db         (Managed PostgreSQL 16, plan: free)
+#   2. fraudlens-ml-service (Docker Web Service, plan: free — FastAPI XGBoost + Isolation Forest)
+#                           Protected by X-Internal-Token; /docs disabled; keep warm with UptimeRobot GET /health
+#   3. fraudlens-backend    (Docker Web Service, plan: free — Node/Express API + auto-schema + inline scorer)
+#                           Keep warm with UptimeRobot GET /health
+#
+# Note: PIPELINE_MODE=inline computes the exact 13 CONTRACTS §5 features (50-tx lookback),
+# calls fraudlens-ml-service /predict, persists PostgreSQL results/alerts, and updates the
+# streaming heartbeat without needing a paid Kafka broker or paid Render background worker.
+# Full Kafka + PySpark Structured Streaming remains default in docker-compose.yml & docker-compose.prod.yml.
 
 databases:
   - name: fraudlens-db
@@ -12,12 +19,13 @@ databases:
     plan: free
 
 services:
-  - type: pserv
+  - type: web
     name: fraudlens-ml-service
     runtime: docker
     dockerfilePath: ./ml-service/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
+    healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -34,35 +42,38 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: "5000"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: fraudlens-db
           property: connectionString
       - key: ML_SERVICE_URL
-        value: "http://fraudlens-ml-service:8000"
-      - key: JWT_SECRET
-        generateValue: true
+        fromService:
+          type: web
+          name: fraudlens-ml-service
+          property: host
+      - key: PIPELINE_MODE
+        value: inline
+      - key: AUTO_SEED_SAMPLE
+        value: "true"
       - key: COOKIE_SECURE
         value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 2h
       - key: SERVICE_TOKEN
         sync: false
       - key: INTERNAL_ML_TOKEN
         sync: false
-
-  - type: worker
-    name: fraudlens-streaming
-    runtime: docker
-    dockerfilePath: ./streaming/Dockerfile
-    dockerContext: .
-    plan: starter
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: fraudlens-db
-          property: connectionString
-      - key: ML_SERVICE_URL
-        value: "http://fraudlens-ml-service:8000"
-      - key: INTERNAL_ML_TOKEN
+      - key: WS_ALLOWED_ORIGINS
         sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_ANALYST_PASSWORD
+        sync: false
+      - key: SEED_VIEWER_PASSWORD
+        sync: false
+      - key: SOCIAL_OAUTH_ENABLED
+        value: "false"
