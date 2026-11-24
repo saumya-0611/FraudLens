@@ -1,19 +1,14 @@
 import { Link } from "react-router-dom";
-import { Activity, ArrowRight, AudioLines, Database, ShieldCheck, Waves, Workflow } from "lucide-react";
+import { Activity, ArrowRight, ShieldCheck } from "lucide-react";
 import "./LandingPage.css";
 
-const pipeline = [
-  { icon: Activity, title: "Transaction source", text: "Transactions enter through the API." },
-  { icon: Waves, title: "Kafka", text: "Events move through the transaction stream." },
-  { icon: Workflow, title: "Spark streaming", text: "Streaming features are prepared for scoring." },
-  { icon: AudioLines, title: "ML scoring", text: "The model scores fraud probability and anomalies." },
-  { icon: ShieldCheck, title: "Risk classification", text: "Transactions are classified as legitimate, suspicious, or high risk." },
-  { icon: ShieldCheck, title: "Decision and alert", text: "Lower-risk activity continues; high-risk cases are flagged for review." },
-  { icon: Database, title: "Records and audit", text: "Results and review events are persisted." },
+const processingModes = [
+  { title: "Inline scoring mode", label: "Configured by the checked-in Render blueprint", steps: ["Transaction API", "Inline feature calculation", "ML service prediction", "PostgreSQL result and alert"] },
+  { title: "Kafka and Spark streaming mode", label: "Streaming architecture available in the project", steps: ["Transaction API", "Kafka transaction topic", "Spark feature and scoring pipeline", "PostgreSQL result and alert"] },
 ];
 
 const capabilities = [
-  ["Live transaction monitoring", "Follow transactions as they move through the processing pipeline."],
+  ["Transaction monitoring", "Review transaction activity returned by the configured backend."],
   ["Fraud probability scoring", "Review model scores alongside each transaction."],
   ["Anomaly detection", "Surface unusual behavior for analyst attention."],
   ["Risk classification", "Group outcomes as legitimate, suspicious, or high risk."],
@@ -50,12 +45,12 @@ export default function LandingPage() {
         <div className="landing-hero-copy">
           <span className="landing-kicker"><i /> FRAUD MONITORING PLATFORM</span>
           <h1>Real-Time Financial <span>Fraud Detection.</span></h1>
-          <p>FraudLens brings streaming data and machine learning together to score transactions, surface suspicious activity, and support timely human review.</p>
+          <p>FraudLens accepts transaction data, combines machine-learning risk scores with anomaly signals, and gives teams a place to review suspicious activity.</p>
           <div className="landing-actions">
             <Link className="landing-primary" to="/">Get started <ArrowRight size={17} /></Link>
             <a className="landing-secondary" href="#how-it-works">Explore how it works</a>
           </div>
-          <div className="landing-proof"><span><ShieldCheck size={16} /> Role-aware access</span><span><Activity size={16} /> Event-driven pipeline</span></div>
+        <div className="landing-proof"><span><ShieldCheck size={16} /> Role-aware access</span><span><Activity size={16} /> Model-assisted review</span></div>
         </div>
 
         <div className="landing-visual" aria-label="Illustration of a transaction moving through fraud review" role="img">
@@ -72,18 +67,16 @@ export default function LandingPage() {
       <section className="landing-overview" id="overview">
         <div className="landing-container landing-overview-grid">
           <div><span className="landing-kicker">THE CHALLENGE</span><h2>Fraud moves quickly.<br /><span>Detection should keep pace.</span></h2></div>
-          <p>When transaction review depends on delayed or disconnected signals, suspicious activity can take longer to reach the people who need to investigate it. FraudLens is designed around a streaming workflow so teams can monitor activity, inspect risk signals, and manage alerts in one place.</p>
+          <p>When transaction review depends on delayed or disconnected signals, suspicious activity can take longer to reach the people who need to investigate it. FraudLens brings transaction monitoring, risk review, and alert management into one configured processing workflow.</p>
         </div>
       </section>
 
       <section className="landing-section landing-container" id="how-it-works">
-        <div className="landing-section-heading"><span className="landing-kicker">FROM EVENT TO REVIEW</span><h2>How FraudLens works</h2><p>A connected path from transaction intake to traceable review.</p></div>
-        <ol className="pipeline-list">
-          {pipeline.map(({ icon: Icon, title, text }, index) => <li className="pipeline-step" key={title}>
-            <span className="pipeline-index">0{index + 1}</span><span className="pipeline-icon"><Icon size={20} /></span><h3>{title}</h3><p>{text}</p>
-            {index < pipeline.length - 1 && <span className="pipeline-connector" aria-hidden="true"><ArrowRight size={15} /></span>}
-          </li>)}
-        </ol>
+        <div className="landing-section-heading"><span className="landing-kicker">PROCESSING MODES</span><h2>How FraudLens works</h2><p>The project supports two processing paths. They are alternatives, not consecutive stages.</p></div>
+        <div className="processing-modes">
+          {processingModes.map(mode => <article className="processing-mode panel" key={mode.title}><div><h3>{mode.title}</h3><p>{mode.label}</p></div><ol>{mode.steps.map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}</ol></article>)}
+        </div>
+        <p className="pipeline-evidence-note">The Render blueprint selects inline mode. The presence of streaming code does not mean Kafka/Spark or a public deployment is currently running.</p>
       </section>
 
       <section className="landing-capabilities">
