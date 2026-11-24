@@ -56,7 +56,10 @@ app.get('/api-docs/openapi.json', (req, res) => {
   return res.json({ openapi: '3.0.3', info: { title: 'FraudLens API', version: '1.0.0' }, paths: {} });
 });
 app.get('/api-docs', (req, res) => {
-  res.setHeader('Content-Security-Policy', "default-src 'self' https://unpkg.com 'unsafe-inline';");
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self' https://unpkg.com 'unsafe-inline' data:; style-src 'self' https://unpkg.com 'unsafe-inline'; script-src 'self' https://unpkg.com 'unsafe-inline'; img-src 'self' https://unpkg.com data:; font-src 'self' https://unpkg.com data:;"
+  );
   for (const dir of swaggerDirs) {
     const p = path.join(dir, 'index.html');
     if (fs.existsSync(p)) {

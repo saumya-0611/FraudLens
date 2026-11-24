@@ -3,11 +3,39 @@
   "info": {
     "title": "FraudLens Real-Time Financial Fraud Detection API",
     "version": "1.0.0",
-    "description": "OpenAPI 3.0 specification for FraudLens Backend REST API (CONTRACTS.md §8) and Internal FastAPI ML Service (CONTRACTS.md §6)."
+    "description": "### Real-Time Financial Fraud Detection & Explainable AI Gateway\n\nFraudLens is an enterprise fraud detection and risk triage platform for digital banking and payment networks. It evaluates credit card transactions in under **150 milliseconds**, combines supervised machine learning with unsupervised anomaly detection, and provides explainable factor attribution.\n\n---\n\n### ⚡ 3-Tier Hybrid Risk Classification Engine\n\n```\nIncoming Transaction (<=150ms)\n  │\n  ├──> 1. XGBoost Classifier (Supervised, trained on historical fraud vectors)\n  └──> 2. Isolation Forest (Unsupervised, catches zero-day anomalous patterns)\n         │\n         ▼\n     Decision Matrix:\n     • HIGH_RISK   (fraud_probability >= 0.70) ──> Alert #ID created, WebSockets broadcast\n     • SUSPICIOUS  (is_anomaly = true)         ──> Step-up authentication / OTP required\n     • LEGITIMATE  (fraud_probability < 0.50)  ──> Instant silent approval\n```\n\n---\n\n### 🔒 Tamper-Proof Cryptographic Audit Ledger\nAll alert state changes and admin actions are recorded in an immutable ledger using **SHA-256 hash chaining** serialized by `pg_advisory_xact_lock(42)`:\n`entry_hash = SHA256(prev_hash + user_id + action + entity_id + details + timestamp)`\nAny direct modification to historical database rows breaks the chain and triggers tamper detection.\n\n---\n\n### 🚀 Quick Testing Guide (Interactive Sandbox)\n1. **Authenticate**: Open `POST /api/auth/login`, click **Try it out**, and send credentials (`admin` / `FlAdmin#2026!Secure`). The backend sets the `fl_token` httpOnly cookie.\n2. **Inspect Dashboard KPIs**: Call `GET /api/dashboard/summary` to view real-time transaction counts, fraud rates, and p95 latencies.\n3. **Triage Alerts**: Call `GET /api/alerts` to view pending alerts. Expand an alert and call `PATCH /api/alerts/{id}` with `{\"state\": \"RESOLVED\", \"resolution\": \"CONFIRMED_FRAUD\"}`.\n4. **Verify Audit Trail**: Call `GET /api/audit-logs` to inspect the newly created cryptographic hash chain entry.\n5. **Ingest Transactions**: Test `POST /api/transactions` with header `X-Service-Token: fl_service_token_simulator_2026`.",
+    "contact": {
+      "name": "FraudLens Engineering (Team 34)",
+      "url": "https://github.com/saumya-0611/FraudLens"
+    },
+    "license": {
+      "name": "MIT License",
+      "url": "https://opensource.org/licenses/MIT"
+    }
   },
   "servers": [
-    { "url": "http://localhost:5000", "description": "Local Backend API" },
-    { "url": "https://localhost:8443", "description": "Local Nginx HTTPS Gateway" }
+    {
+      "url": "https://fraudlens-backend-j17p.onrender.com",
+      "description": "Production Cloud Gateway (Render Web Service + Neon PostgreSQL 18)"
+    },
+    {
+      "url": "http://localhost:5000",
+      "description": "Local Development (Node.js Express API)"
+    },
+    {
+      "url": "https://localhost:8443",
+      "description": "Local Secure Docker Nginx Gateway"
+    }
+  ],
+  "tags": [
+    { "name": "System & Health", "description": "Liveness probes, service heartbeats, and API root status." },
+    { "name": "Auth & Sessions", "description": "JWT cookie-based authentication, user profile, and RBAC authorization." },
+    { "name": "Transactions", "description": "Stream ingestion, historical query, card account masking, and SHAP feature attribution." },
+    { "name": "Alerts & Triage", "description": "High-risk alert lifecycle (NEW -> UNDER_REVIEW -> RESOLVED) and analyst investigation." },
+    { "name": "Analytics & Dashboard", "description": "Real-time KPI aggregations, p50/p95 scoring latencies, and minute-by-minute fraud volume trends." },
+    { "name": "MLOps & Drift Governance", "description": "XGBoost + Isolation Forest model registry, PSI drift monitoring, and zero-downtime hot-reloading." },
+    { "name": "Compliance & Audit Logs", "description": "Tamper-evident SHA-256 chained audit logs for regulatory compliance (PCI-DSS, SOX, GDPR)." },
+    { "name": "User Administration", "description": "Admin-only user provisioning, password management, and role assignment." }
   ],
   "components": {
     "securitySchemes": {
@@ -15,19 +43,19 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "fl_token",
-        "description": "httpOnly JWT session cookie (HS256, 2h expiry)"
+        "description": "httpOnly signed JWT session cookie (HS256, 2-hour sliding expiry). Set automatically upon successful `/api/auth/login`."
       },
       "serviceToken": {
         "type": "apiKey",
         "in": "header",
         "name": "X-Service-Token",
-        "description": "Constant-time service token for transaction simulator ingestion"
+        "description": "Shared secret for headless ingestion by the transaction simulator or payment gateway webhook."
       },
       "internalMlToken": {
         "type": "apiKey",
         "in": "header",
         "name": "X-Internal-Token",
-        "description": "Internal service token for ml-service (:8000)"
+        "description": "Internal token for microservice communication between backend and FastAPI ml-service."
       }
     },
     "schemas": {
@@ -39,7 +67,7 @@
             "properties": {
               "code": { "type": "string", "example": "FORBIDDEN" },
               "message": { "type": "string", "example": "You do not have access to this resource." },
-              "request_id": { "type": "string", "example": "r-1a2b3c" }
+              "request_id": { "type": "string", "example": "r-8e7c31" }
             }
           }
         }
@@ -48,56 +76,79 @@
         "type": "object",
         "required": ["transaction_id", "account_ref", "amount", "tx_time", "category"],
         "properties": {
-          "transaction_id": { "type": "string", "example": "9f1c2e7a-1111-4222-8333-abcdef123456" },
-          "account_ref": { "type": "string", "example": "2703186189652095" },
-          "amount": { "type": "number", "example": 1850.0 },
-          "tx_time": { "type": "string", "format": "date-time", "example": "2026-11-20T03:12:45Z" },
-          "category": { "type": "string", "example": "shopping_net" },
+          "transaction_id": { "type": "string", "example": "txn_8941_sim_20261124" },
+          "account_ref": { "type": "string", "example": "4532015112830366", "description": "Primary Account Number (PAN) or token. Automatically masked as XXXX-0366 in all analyst outputs." },
+          "amount": { "type": "number", "example": 2450.75, "description": "Transaction currency amount" },
+          "tx_time": { "type": "string", "format": "date-time", "example": "2026-11-24T12:30:00.000Z" },
+          "category": { "type": "string", "example": "shopping_net", "enum": ["shopping_net", "grocery_pos", "gas_transport", "misc_net", "shopping_pos", "food_dining", "entertainment", "health_fitness"] },
           "merchant": { "type": "string", "example": "fraud_Kutch LLC" },
           "lat": { "type": "number", "example": 36.0788 },
           "lon": { "type": "number", "example": -81.1781 },
-          "merch_lat": { "type": "number", "example": 36.011293 },
-          "merch_lon": { "type": "number", "example": -82.048315 },
+          "merch_lat": { "type": "number", "example": 36.5112 },
+          "merch_lon": { "type": "number", "example": -82.0483 },
           "customer_age": { "type": "integer", "example": 34 }
         }
       },
-      "TransactionItem": {
+      "TopReason": {
         "type": "object",
         "properties": {
-          "transaction_id": { "type": "string" },
-          "account_masked": { "type": "string", "example": "XXXX-2095" },
-          "amount": { "type": "number", "example": 1850.0 },
-          "category": { "type": "string", "example": "shopping_net" },
-          "merchant": { "type": "string", "example": "fraud_Kutch LLC" },
-          "tx_time": { "type": "string", "format": "date-time" },
-          "risk_category": { "type": "string", "enum": ["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK", "PENDING"] },
-          "fraud_probability": { "type": "number", "nullable": true, "example": 0.93 },
-          "is_anomaly": { "type": "boolean", "example": true },
-          "model_version": { "type": "string", "example": "v1" }
+          "feature": { "type": "string", "example": "amount_ratio" },
+          "impact": { "type": "number", "example": 0.42 },
+          "text": { "type": "string", "example": "Amount is 38x this account's usual average" }
         }
       },
       "AlertPatch": {
         "type": "object",
         "required": ["state"],
         "properties": {
-          "state": { "type": "string", "enum": ["UNDER_REVIEW", "RESOLVED"] },
-          "resolution": { "type": "string", "enum": ["CONFIRMED_FRAUD", "FALSE_POSITIVE"], "nullable": true }
+          "state": { "type": "string", "enum": ["UNDER_REVIEW", "RESOLVED"], "example": "RESOLVED" },
+          "resolution": { "type": "string", "enum": ["CONFIRMED_FRAUD", "FALSE_POSITIVE"], "example": "CONFIRMED_FRAUD" }
         }
       }
     }
   },
   "paths": {
+    "/": {
+      "get": {
+        "tags": ["System & Health"],
+        "summary": "Root API status & operational message",
+        "responses": {
+          "200": {
+            "description": "API status payload",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "API is running",
+                  "environment": "production",
+                  "message": "Fraud Detection API is operational"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
-        "tags": ["System"],
-        "summary": "Public backend health check",
-        "responses": { "200": { "description": "Service is healthy" } }
+        "tags": ["System & Health"],
+        "summary": "Public backend health & PostgreSQL connectivity probe",
+        "responses": {
+          "200": {
+            "description": "Service is healthy and database is connected",
+            "content": {
+              "application/json": {
+                "example": { "status": "ok" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/auth/login": {
       "post": {
-        "tags": ["Auth"],
-        "summary": "Authenticate user and set httpOnly fl_token cookie",
+        "tags": ["Auth & Sessions"],
+        "summary": "Authenticate user and issue httpOnly JWT session cookie",
+        "description": "Authenticates against PostgreSQL credentials and sets a secure httpOnly cookie (`fl_token`). Enforces exponential delay after 5 failed attempts.",
         "requestBody": {
           "required": true,
           "content": {
@@ -107,161 +158,432 @@
                 "required": ["username", "password"],
                 "properties": {
                   "username": { "type": "string", "example": "admin" },
-                  "password": { "type": "string", "example": "change_me" }
+                  "password": { "type": "string", "example": "FlAdmin#2026!Secure" }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Authenticated successfully" },
-          "401": { "description": "INVALID_CREDENTIALS" },
-          "429": { "description": "RATE_LIMITED" }
+          "200": {
+            "description": "Authentication successful",
+            "content": {
+              "application/json": {
+                "example": {
+                  "username": "admin",
+                  "role": "ADMIN",
+                  "expires_in": 7200
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": { "code": "UNAUTHENTICATED", "message": "Invalid username or password.", "request_id": "r-01a2b3" } }
+              }
+            }
+          }
         }
       }
     },
     "/api/auth/logout": {
       "post": {
-        "tags": ["Auth"],
-        "summary": "Clear fl_token session cookie",
+        "tags": ["Auth & Sessions"],
+        "summary": "Terminate session and clear fl_token cookie",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "204": { "description": "Logged out" } }
+        "responses": {
+          "200": {
+            "description": "Logged out successfully",
+            "content": {
+              "application/json": {
+                "example": { "message": "Logged out successfully" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/auth/me": {
       "get": {
-        "tags": ["Auth"],
-        "summary": "Get current authenticated user profile",
+        "tags": ["Auth & Sessions"],
+        "summary": "Inspect active user session & RBAC role",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "Current user and role" } }
+        "responses": {
+          "200": {
+            "description": "Active session profile",
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": 1,
+                  "username": "admin",
+                  "role": "ADMIN",
+                  "status": "ACTIVE"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/transactions": {
       "post": {
         "tags": ["Transactions"],
-        "summary": "Ingest a transaction into Kafka transactions-raw (ADMIN or X-Service-Token)",
+        "summary": "Ingest transaction for real-time fraud scoring",
+        "description": "Ingests a financial transaction. In `PIPELINE_MODE=inline`, immediately computes the 13 streaming CONTRACTS features, invokes the ML service, evaluates hybrid thresholds, and logs high-risk alerts within 150ms.",
         "security": [{ "serviceToken": [] }, { "cookieAuth": [] }],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TransactionIngest" } } }
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TransactionIngest" }
+            }
+          }
         },
-        "responses": { "202": { "description": "Accepted for streaming fraud evaluation" } }
+        "responses": {
+          "202": {
+            "description": "Accepted and scored successfully",
+            "content": {
+              "application/json": {
+                "example": {
+                  "transaction_id": "txn_8941_sim_20261124",
+                  "status": "ACCEPTED"
+                }
+              }
+            }
+          }
+        }
       },
       "get": {
         "tags": ["Transactions"],
-        "summary": "List transactions with masked account numbers (account_masked)",
+        "summary": "List transactions with masked card numbers",
+        "description": "Queries historical transactions with role-based masking (`XXXX-0366`), filterable by risk category (`LEGITIMATE`, `SUSPICIOUS`, `HIGH_RISK`).",
         "security": [{ "cookieAuth": [] }],
         "parameters": [
-          { "name": "risk", "in": "query", "schema": { "type": "string", "enum": ["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK", "PENDING"] } },
+          { "name": "risk", "in": "query", "schema": { "type": "string", "enum": ["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK", "PENDING"] }, "description": "Filter by evaluated risk classification" },
           { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
           { "name": "page_size", "in": "query", "schema": { "type": "integer", "default": 20 } }
         ],
-        "responses": { "200": { "description": "Paginated masked transactions" } }
+        "responses": {
+          "200": {
+            "description": "Paginated list of transactions",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "transaction_id": "sample-tx-0015",
+                      "account_masked": "XXXX-3100",
+                      "amount": 3055.00,
+                      "category": "shopping_net",
+                      "merchant": "fraud_Kutch LLC",
+                      "tx_time": "2026-11-24T12:00:00.000Z",
+                      "risk_category": "HIGH_RISK",
+                      "fraud_probability": 0.94,
+                      "is_anomaly": true,
+                      "model_version": "v1"
+                    }
+                  ],
+                  "total": 201,
+                  "page": 1,
+                  "page_size": 20
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/transactions/{id}": {
       "get": {
         "tags": ["Transactions"],
-        "summary": "Get transaction detail including top_reasons (SHAP) and 13 features",
+        "summary": "Get transaction details with SHAP explainability reasons",
+        "description": "Returns full details for a transaction, including the Top 3 TreeSHAP explainability factors and 13 streaming feature values.",
         "security": [{ "cookieAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "Transaction details" }, "404": { "description": "NOT_FOUND" } }
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "example": "sample-tx-0015" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction detail payload",
+            "content": {
+              "application/json": {
+                "example": {
+                  "transaction_id": "sample-tx-0015",
+                  "account_masked": "XXXX-3100",
+                  "amount": 3055.00,
+                  "category": "shopping_net",
+                  "merchant": "fraud_Kutch LLC",
+                  "risk_category": "HIGH_RISK",
+                  "fraud_probability": 0.94,
+                  "anomaly_score": 0.88,
+                  "is_anomaly": true,
+                  "model_version": "v1",
+                  "top_reasons": [
+                    { "feature": "amount_ratio", "impact": 0.42, "text": "Amount is 38x this account's usual average" },
+                    { "feature": "amount", "impact": 0.31, "text": "High transaction amount ($3055.00)" },
+                    { "feature": "distance_km", "impact": 0.19, "text": "Merchant is 98.4 km away from customer location" }
+                  ],
+                  "features": {
+                    "amount": 3055.00,
+                    "amount_ratio": 38.0,
+                    "velocity_1h": 4,
+                    "hour": 3,
+                    "is_night": 1
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/alerts": {
       "get": {
-        "tags": ["Alerts"],
-        "summary": "List high-risk fraud alerts (ADMIN, ANALYST)",
+        "tags": ["Alerts & Triage"],
+        "summary": "List fraud alerts pending analyst review",
         "security": [{ "cookieAuth": [] }],
         "parameters": [
-          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["NEW", "UNDER_REVIEW", "RESOLVED"] } }
+          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["NEW", "UNDER_REVIEW", "RESOLVED"] }, "description": "Filter by workflow triage state" }
         ],
-        "responses": { "200": { "description": "Paginated alerts" } }
+        "responses": {
+          "200": {
+            "description": "Paginated alerts queue",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "alert_id": 1,
+                      "transaction_id": "sample-tx-0015",
+                      "account_masked": "XXXX-3100",
+                      "amount": 3055.00,
+                      "category": "shopping_net",
+                      "merchant": "fraud_Kutch LLC",
+                      "risk_score": 0.94,
+                      "state": "NEW",
+                      "created_at": "2026-11-24T12:00:00.000Z"
+                    }
+                  ],
+                  "total": 14
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/alerts/{id}": {
       "patch": {
-        "tags": ["Alerts"],
-        "summary": "Transition alert state (NEW -> UNDER_REVIEW -> RESOLVED)",
+        "tags": ["Alerts & Triage"],
+        "summary": "Update alert triage state (NEW -> UNDER_REVIEW -> RESOLVED)",
+        "description": "Transitions an alert through the investigation workflow. Marking an alert as `RESOLVED` requires a valid resolution (`CONFIRMED_FRAUD` or `FALSE_POSITIVE`) and automatically writes a SHA-256 chained entry into `audit_logs`.",
         "security": [{ "cookieAuth": [] }],
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "example": 1 }
+        ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlertPatch" } } }
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AlertPatch" },
+              "example": {
+                "state": "RESOLVED",
+                "resolution": "CONFIRMED_FRAUD"
+              }
+            }
+          }
         },
-        "responses": { "200": { "description": "Updated alert" }, "409": { "description": "CONFLICT (already RESOLVED)" } }
+        "responses": {
+          "200": {
+            "description": "Alert successfully resolved and recorded in audit log",
+            "content": {
+              "application/json": {
+                "example": {
+                  "alert_id": 1,
+                  "state": "RESOLVED",
+                  "resolution": "CONFIRMED_FRAUD",
+                  "updated_at": "2026-11-24T12:05:00.000Z"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/dashboard/summary": {
       "get": {
-        "tags": ["Dashboard"],
-        "summary": "Real-time KPI counts, p50/p95 latencies, active model & 5-service health status",
+        "tags": ["Analytics & Dashboard"],
+        "summary": "Real-time KPI metrics, fraud volumes, and p50/p95 latency",
+        "description": "Returns executive summary metrics, including total transaction count, total fraud losses prevented, active model version, and p95 pipeline scoring latencies.",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "Dashboard summary payload" } }
+        "responses": {
+          "200": {
+            "description": "Dashboard summary metrics",
+            "content": {
+              "application/json": {
+                "example": {
+                  "total_transactions": 201,
+                  "flagged_transactions": 14,
+                  "fraud_rate": 0.069,
+                  "scoring_latency_p95_ms": 112.4,
+                  "scoring_latency_p50_ms": 48.2,
+                  "active_model": "v1",
+                  "pipeline_status": "ONLINE"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/dashboard/trends": {
       "get": {
-        "tags": ["Dashboard"],
-        "summary": "Per-minute total vs. flagged transaction counts",
+        "tags": ["Analytics & Dashboard"],
+        "summary": "Minute-by-minute total vs. flagged transaction counts",
         "security": [{ "cookieAuth": [] }],
-        "parameters": [{ "name": "minutes", "in": "query", "schema": { "type": "integer", "default": 60 } }],
-        "responses": { "200": { "description": "Time-series points" } }
+        "parameters": [
+          { "name": "minutes", "in": "query", "schema": { "type": "integer", "default": 60 }, "description": "Lookback window in minutes" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time-series chart points",
+            "content": {
+              "application/json": {
+                "example": [
+                  { "timestamp": "2026-11-24T12:00:00Z", "total": 45, "flagged": 3 },
+                  { "timestamp": "2026-11-24T12:01:00Z", "total": 52, "flagged": 4 }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "/api/models": {
       "get": {
-        "tags": ["MLOps (ADMIN)"],
-        "summary": "List model versions, active version, and latest PSI drift report",
+        "tags": ["MLOps & Drift Governance"],
+        "summary": "List model registry versions & latest PSI drift status (ADMIN)",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "Model registry state" } }
+        "responses": {
+          "200": {
+            "description": "Model registry and drift health",
+            "content": {
+              "application/json": {
+                "example": {
+                  "active_version": "v1",
+                  "versions": [
+                    { "version": "v1", "algorithm": "XGBoost + Isolation Forest", "status": "ACTIVE", "metrics": { "pr_auc": 0.8398, "roc_auc": 0.9880 } }
+                  ],
+                  "latest_drift": { "psi_score": 0.042, "status": "OK", "sample_size": 200 }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/models/drift-check": {
       "post": {
-        "tags": ["MLOps (ADMIN)"],
-        "summary": "Run PSI concept drift check on last 1000 scored transactions",
+        "tags": ["MLOps & Drift Governance"],
+        "summary": "Execute Population Stability Index (PSI) drift scan (ADMIN)",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "Drift report (OK / WARNING / DRIFT)" } }
-      }
-    },
-    "/api/models/retrain": {
-      "post": {
-        "tags": ["MLOps (ADMIN)"],
-        "summary": "Train candidate XGBoost + Isolation Forest model and validate PR-AUC gate",
-        "security": [{ "cookieAuth": [] }],
-        "responses": { "202": { "description": "Candidate model trained and validated" } }
+        "responses": {
+          "200": {
+            "description": "Drift evaluation report",
+            "content": {
+              "application/json": {
+                "example": {
+                  "psi_score": 0.038,
+                  "status": "OK",
+                  "sample_size": 200,
+                  "psi_features": { "amount": 0.012, "amount_ratio": 0.024 }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/models/{version}/activate": {
       "post": {
-        "tags": ["MLOps (ADMIN)"],
-        "summary": "Verify SHA-256 and hot-reload VALIDATED model version without restart",
+        "tags": ["MLOps & Drift Governance"],
+        "summary": "Zero-downtime hot-reload of a validated model version (ADMIN)",
+        "description": "Verifies cryptographic SHA-256 checksum of model artifacts on disk and atomically hot-reloads them in FastAPI memory without service restart.",
         "security": [{ "cookieAuth": [] }],
-        "parameters": [{ "name": "version", "in": "path", "required": true, "schema": { "type": "string", "example": "v2" } }],
-        "responses": { "200": { "description": "Model activated" } }
-      }
-    },
-    "/api/users": {
-      "get": {
-        "tags": ["Admin"],
-        "summary": "List all platform users (ADMIN only)",
-        "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "User list" } }
-      },
-      "post": {
-        "tags": ["Admin"],
-        "summary": "Create a new user (ADMIN only)",
-        "security": [{ "cookieAuth": [] }],
-        "responses": { "201": { "description": "User created" } }
+        "parameters": [
+          { "name": "version", "in": "path", "required": true, "schema": { "type": "string" }, "example": "v1" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model activated successfully",
+            "content": {
+              "application/json": {
+                "example": { "message": "Model version v1 activated successfully." }
+              }
+            }
+          }
+        }
       }
     },
     "/api/audit-logs": {
       "get": {
-        "tags": ["Admin"],
-        "summary": "Query SHA-256 hash-chained audit logs (ADMIN only)",
+        "tags": ["Compliance & Audit Logs"],
+        "summary": "Query cryptographic SHA-256 hash-chained audit trail (ADMIN)",
+        "description": "Retrieves the tamper-evident audit ledger. Each entry includes `prev_hash` and `entry_hash` ensuring mathematical verification of log integrity.",
         "security": [{ "cookieAuth": [] }],
-        "responses": { "200": { "description": "Paginated audit trail" } }
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "page_size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated audit trail",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "id": 1,
+                      "event_time": "2026-11-24T12:05:00.000Z",
+                      "username": "admin",
+                      "action": "ALERT_RESOLVED",
+                      "entity": "ALERT",
+                      "entity_id": "1",
+                      "details": { "resolution": "CONFIRMED_FRAUD" },
+                      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                      "entry_hash": "a8f5b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcde"
+                    }
+                  ],
+                  "total": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": ["User Administration"],
+        "summary": "List platform users with assigned roles (ADMIN)",
+        "security": [{ "cookieAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of user accounts",
+            "content": {
+              "application/json": {
+                "example": [
+                  { "id": 1, "username": "admin", "role": "ADMIN", "status": "ACTIVE" },
+                  { "id": 2, "username": "analyst", "role": "ANALYST", "status": "ACTIVE" },
+                  { "id": 3, "username": "viewer", "role": "VIEWER", "status": "ACTIVE" }
+                ]
+              }
+            }
+          }
+        }
       }
     }
   }
