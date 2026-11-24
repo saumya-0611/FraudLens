@@ -1,0 +1,66 @@
+# FraudLens Production Caddyfile (Single-VM HTTPS + SPA + Same-Origin API & WebSocket Proxy)
+#
+# Set SITE_ADDRESS in .env.prod:
+#   - Custom domain:       SITE_ADDRESS=fraudlens.yourdomain.com
+#   - Free sslip.io DNS:   SITE_ADDRESS=<VM_PUBLIC_IP>.sslip.io   (auto Let's Encrypt HTTPS!)
+#   - HTTP-only test:      SITE_ADDRESS=:80
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# Security headers for the single-origin SPA + API surface
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Strip sensitive headers and OAuth callback query parameters from access logs
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete code
+					delete state
+					delete session_state
+				}
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+				request>headers>X-Service-Token delete
+				request>headers>X-Internal-Token delete
+			}
+		}
+	}
+
+	# Backend REST API
+	handle /api/* {
+		reverse_proxy backend:5000
+	}
+
+	# Live alert WebSocket stream (/ws/alerts) - Caddy natively upgrades WebSockets
+	handle /ws/* {
+		reverse_proxy backend:5000
+	}
+
+	# Public liveness health check
+	handle /health {
+		reverse_proxy backend:5000
+	}
+
+	# OpenAPI 3.0 & Swagger UI
+	handle /api-docs* {
+		reverse_proxy backend:5000
+	}
+
+	# Compiled React SPA static bundle with client-side router fallback
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

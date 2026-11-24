@@ -1,5 +1,7 @@
 # secrets
 .env
+.env.prod
+.env.local
 *.pem
 # node
 node_modules/
