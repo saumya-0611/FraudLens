@@ -1,0 +1,190 @@
+const express = require('express');
+const cookieParser = require('cookie-parser');
+const request = require('supertest');
+const { signToken, verifyRequestCookie } = require('../utils/jwt');
+
+jest.mock('../config/db', () => ({ query: jest.fn() }));
+jest.mock('../audit/auditLogger', () => ({ audit: jest.fn() }));
+jest.mock('../auth/oauthStore', () => ({
+  ready: jest.fn(), saveAttempt: jest.fn(), consumeAttempt: jest.fn(), resolveIdentity: jest.fn(),
+}));
+jest.mock('../auth/oidc', () => ({
+  enabledProviders: () => Object.fromEntries(['google', 'linkedin'].map((name) => [name, {
+    name, origin: 'https://fraudlens.test', redirectUri: 'https://fraudlens.test/api/auth/' + name + '/callback',
+  }])),
+  providerClient: jest.fn(),
+}));
+
+const { query } = require('../config/db');
+const { audit } = require('../audit/auditLogger');
+const store = require('../auth/oauthStore');
+const { providerClient } = require('../auth/oidc');
+const router = require('../routes/oauth.routes');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
+
+const app = express().use(cookieParser()).use('/api/auth', router);
+app.get('/admin-fixture', authenticate, authorize('ADMIN'), (_req, res) => res.status(204).end());
+const origins = { google: 'https://accounts.google.com', linkedin: 'https://www.linkedin.com/oauth' };
+const viewer = { id: 51, username: 'social-local-viewer', role: 'VIEWER', status: 'ACTIVE' };
+const admin = { id: 52, username: 'existing-admin', role: 'ADMIN', status: 'ACTIVE' };
+const verify = jest.fn();
+let attempts;
+let server;
+let adminCookie;
+
+beforeAll(async () => {
+  process.env.JWT_SECRET = 'oauth-routes-test-fixture-secret-at-least-32';
+  process.env.COOKIE_SECURE = 'true';
+  adminCookie = 'fl_token=' + signToken(admin);
+  server = await new Promise((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+});
+afterAll(() => new Promise((resolve) => server.close(resolve)));
+beforeEach(() => {
+  jest.resetAllMocks();
+  attempts = new Map();
+  store.ready.mockResolvedValue(true);
+  store.saveAttempt.mockImplementation(async (attempt) => attempts.set(attempt.stateHash, attempt));
+  store.consumeAttempt.mockImplementation(async (state, browser, provider) => {
+    const attempt = attempts.get(state);
+    if (!attempt || attempt.browserHash !== browser || attempt.provider !== provider || attempt.expired) return;
+    attempts.delete(state);
+    return {
+      nonce: attempt.nonce, code_verifier: attempt.verifier,
+      link_user_id: attempt.linkUserId, link_session_hash: attempt.linkSessionHash,
+    };
+  });
+  providerClient.mockImplementation(async ({ name }) => ({
+    begin: async (state) => ({
+      location: origins[name] + '/authorize?state=' + state, nonce: 'fixture-nonce', verifier: null,
+    }),
+    verify: async (url, attempt) => {
+      await verify(url, attempt);
+      return { issuer: origins[name], subject: 'stable-subject' };
+    },
+  }));
+  store.resolveIdentity.mockResolvedValue({ kind: 'registered', user: viewer });
+  query.mockResolvedValue({ rows: [admin] });
+});
+
+const client = () => request(server);
+const prefix = '/api/auth/';
+const localCookie = () => adminCookie;
+
+async function start(provider = 'google', link = false) {
+  const res = link
+    ? await client().post(prefix + provider + '/link').set('Origin', 'https://fraudlens.test').set('Cookie', localCookie())
+    : await client().get(prefix + provider + '/start');
+  expect(res.status).toBe(303);
+  const url = new URL(res.headers.location);
+  expect(url.origin).toBe(new URL(origins[provider]).origin);
+  const cookie = res.headers['set-cookie'][0];
+  expect(cookie).toContain('Path=' + prefix + provider + '/callback');
+  expect(cookie).toContain('HttpOnly');
+  expect(cookie).toContain('Secure');
+  expect(cookie).toContain('SameSite=Lax');
+  return { state: url.searchParams.get('state'), cookie: cookie.split(';')[0] };
+}
+
+function callback(provider, attempt, options = {}) {
+  return client().get(prefix + provider + '/callback').query({
+    state: attempt.state, code: 'fixture-code', ...options.query,
+  }).set('Cookie', [attempt.cookie, options.session].filter(Boolean).join('; '));
+}
+
+test.each(['google', 'linkedin'])('%s registers and issues the normal VIEWER session', async (provider) => {
+  const attempt = await start(provider);
+  const res = await callback(provider, attempt, { query: { role: 'ADMIN', next: 'https://example.invalid' } });
+  expect(res.status).toBe(303);
+  expect(res.headers.location).toBe('/dashboard');
+  expect(res.headers['cache-control']).toBe('no-store');
+  expect(res.headers['referrer-policy']).toBe('no-referrer');
+  const cookie = res.headers['set-cookie'].find((value) => value.startsWith('fl_token='));
+  expect(verifyRequestCookie({ headers: { cookie } })).toEqual({
+    id: viewer.id, username: viewer.username, role: 'VIEWER',
+  });
+  expect(store.resolveIdentity).toHaveBeenCalledWith({ issuer: origins[provider], subject: 'stable-subject' }, null);
+  expect(audit.mock.calls.map(([event]) => event.action)).toEqual(['USER_CREATED', 'LOGIN_SUCCESS']);
+  for (const [event] of audit.mock.calls) expect(event.details).not.toHaveProperty('code');
+  query.mockResolvedValueOnce({ rows: [viewer] });
+  expect((await client().get('/admin-fixture').set('Cookie', cookie.split(';')[0])).status).toBe(403);
+});
+
+test('a returning account retains its local role and does not register again', async () => {
+  store.resolveIdentity.mockResolvedValue({ kind: 'login', user: admin });
+  const res = await callback('google', await start());
+  expect(res.headers.location).toBe('/dashboard');
+  expect(audit.mock.calls.map(([event]) => event.action)).toEqual(['LOGIN_SUCCESS']);
+});
+
+test('missing schema keeps both providers unavailable', async () => {
+  store.ready.mockResolvedValue(false);
+  expect((await client().get(prefix + 'providers')).body).toEqual({ google: false, linkedin: false });
+  const res = await client().get(prefix + 'google/start');
+  expect(res.headers.location).toBe('/?oauth_error=unavailable');
+  expect(providerClient).not.toHaveBeenCalled();
+});
+
+test('concurrent copies of one callback can consume the attempt only once', async () => {
+  const attempt = await start();
+  const responses = await Promise.all([callback('google', attempt), callback('google', attempt)]);
+  expect(responses.map((res) => res.headers.location).sort()).toEqual(['/?oauth_error=state', '/dashboard']);
+  expect(verify).toHaveBeenCalledTimes(1);
+  expect(store.resolveIdentity).toHaveBeenCalledTimes(1);
+});
+
+test('concurrent browser flows receive distinct state and correlation cookies', async () => {
+  const attempts = await Promise.all([start(), start()]);
+  expect(attempts[0].state).not.toBe(attempts[1].state);
+  expect(attempts[0].cookie.split('=')[1]).not.toBe(attempts[1].cookie.split('=')[1]);
+});
+
+test('provider mismatch, mismatched proof, and expiration stop before token exchange', async () => {
+  const attempt = await start();
+  const wrong = await callback('linkedin', attempt);
+  const other = await start();
+  const wrongProof = await callback('google', { ...attempt, cookie: other.cookie });
+  for (const stored of attempts.values()) stored.expired = true;
+  const expired = await callback('google', attempt);
+  expect([wrong, wrongProof, expired].map((res) => res.headers.location))
+    .toEqual(Array(3).fill('/?oauth_error=state'));
+  expect(verify).not.toHaveBeenCalled();
+});
+
+test('disabled accounts never receive the session cookie', async () => {
+  store.resolveIdentity.mockResolvedValue({ kind: 'disabled' });
+  const res = await callback('google', await start());
+  expect(res.headers.location).toBe('/?oauth_error=disabled');
+  expect(res.headers['set-cookie'].some((value) => value.startsWith('fl_token='))).toBe(false);
+});
+
+test('denied consent, provider errors and reused codes expose only fixed errors', async () => {
+  const attempt = await start();
+  const denied = await client().get(prefix + 'google/callback')
+    .query({ state: attempt.state, error: 'access_denied', error_description: 'PRIVATE-FIXTURE' })
+    .set('Cookie', attempt.cookie);
+  expect(denied.headers.location).toBe('/?oauth_error=denied');
+  expect(denied.text).not.toContain('PRIVATE-FIXTURE');
+  verify.mockRejectedValueOnce(new Error('PRIVATE-FIXTURE reused code'));
+  const invalid = await callback('google', await start());
+  expect(invalid.headers.location).toBe('/?oauth_error=provider');
+  expect(invalid.text).not.toContain('PRIVATE-FIXTURE');
+  expect(store.resolveIdentity).not.toHaveBeenCalled();
+});
+
+test('linking requires an authenticated, same-origin POST and the same session at completion', async () => {
+  expect((await client().post(prefix + 'google/link')).status).toBe(401);
+  expect((await client().post(prefix + 'google/link').set('Cookie', localCookie())).status).toBe(403);
+  const noSession = await callback('google', await start('google', true));
+  expect(noSession.headers.location).toBe('/?oauth_error=state');
+  expect(store.resolveIdentity).not.toHaveBeenCalled();
+
+  store.resolveIdentity.mockResolvedValue({ kind: 'linked', user: admin });
+  const linked = await callback('google', await start('google', true), { session: localCookie() });
+  expect(linked.headers.location).toBe('/dashboard');
+  expect(store.resolveIdentity).toHaveBeenCalledWith(expect.anything(), admin.id);
+  expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'EXTERNAL_IDENTITY_LINKED' }));
+  expect(linked.headers['set-cookie'].some((value) => value.startsWith('fl_token='))).toBe(false);
+});

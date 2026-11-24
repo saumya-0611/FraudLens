@@ -1,8 +1,9 @@
 
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
     Routes,
     Route,
+    Link,
     Navigate,
     useNavigate,
 } from "react-router-dom";
@@ -12,6 +13,7 @@ import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import { useAuth } from "./hooks/useAuth";
 import LandingPage from "./pages/LandingPage";
+import { request } from "./services/api";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Transactions = lazy(() => import("./pages/Transactions"));
 const Alerts = lazy(() => import("./pages/Alerts"));
@@ -25,15 +27,38 @@ import "./App.css";
 // LOGIN PAGE
 // ------------------------------------
 
+const socialErrors = new Map([
+    ["denied", "Sign-in was canceled. You can try again."],
+    ["disabled", "This FraudLens account is disabled. Contact your administrator."],
+    ["state", "This sign-in attempt expired or could not be verified. Please try again."],
+    ["provider", "Social sign-in could not be completed. Please try again."],
+    ["unavailable", "That sign-in provider is currently unavailable."],
+    ["conflict", "That social account is already linked. Contact your administrator for help."],
+    ["limited", "Too many sign-in attempts. Wait a minute and try again."],
+]);
+
 function LoginPage() {
     const [showPassword, setShowPassword] = useState(false);
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
-    const [message, setMessage] = useState("");
+    const [message, setMessage] = useState(() => {
+        const error = new URLSearchParams(window.location.search).get("oauth_error");
+        return socialErrors.get(error) || "";
+    });
     const [submitting, setSubmitting] = useState(false);
+    const [providers, setProviders] = useState({});
 
     const { login, user, loading, authError } = useAuth();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        if (import.meta.env.VITE_USE_MOCKS === "true" || loading || user) return;
+        const controller = new AbortController();
+        request("/api/auth/providers", { signal: controller.signal })
+            .then(setProviders)
+            .catch(() => {});
+        return () => controller.abort();
+    }, [loading, user]);
 
     // Handle login form submission.
     const handleLogin = async (event) => {
@@ -82,7 +107,7 @@ function LoginPage() {
             <div className="ambient ambient-two" />
 
             <nav className="topbar">
-                <a className="brand" href="/" aria-label="Fraud Lens home">
+                <Link className="brand" to="/home" aria-label="Fraud Lens overview">
                     <span className="brand-mark">
                         <svg viewBox="0 0 32 32" fill="none">
                             <path
@@ -103,11 +128,11 @@ function LoginPage() {
                     <span>
                         FRAUD<span className="brand-light">LENS</span>
                     </span>
-                </a>
+                </Link>
 
-                <span className="topbar-label">
-                    INTELLIGENT FRAUD MONITORING
-                </span>
+                <Link className="topbar-label topbar-overview-link" to="/home">
+                    PLATFORM OVERVIEW
+                </Link>
             </nav>
 
             <section className="login-layout">
@@ -255,8 +280,35 @@ function LoginPage() {
                             )}
                         </form>
 
+                        <div className="divider">
+                            <span />
+                            <p>OR USE A SOCIAL ACCOUNT</p>
+                            <span />
+                        </div>
+
+                        <div className="social-grid">
+                            <button
+                                type="button"
+                                disabled={!providers.google}
+                                onClick={() => window.location.assign("/api/auth/google/start")}
+                            >
+                                <span className="social-icon google-icon" aria-hidden="true">G</span>
+                                {providers.google ? "Google" : "Google unavailable"}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!providers.linkedin}
+                                onClick={() => window.location.assign("/api/auth/linkedin/start")}
+                            >
+                                <span className="social-icon linkedin-icon" aria-hidden="true">in</span>
+                                {providers.linkedin ? "LinkedIn" : "LinkedIn unavailable"}
+                            </button>
+                        </div>
+
                         <p className="account-note">
-                            Access is provided by your Fraud Lens administrator.
+                            {providers.google || providers.linkedin
+                                ? "New social accounts start with Viewer access."
+                                : "Access is provided by your Fraud Lens administrator."}
                         </p>
                     </div>
 
