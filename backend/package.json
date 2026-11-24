@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "pretest": "node --test src/tests/fixtures/oidc.node.cjs",
     "test": "jest --runInBand",
     "seed": "node scripts/seed.js",
     "seed:sample": "node scripts/seed_sample_data.js",
@@ -20,6 +21,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "kafkajs": "^2.2.4",
+    "openid-client": "6.9.1",
     "pg": "^8.11.5",
     "ws": "^8.17.0",
     "zod": "^4.6.7"

@@ -2,10 +2,9 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
-const jwt = require('jsonwebtoken');
 
 const { query } = require('../config/db');
-const { signToken } = require('../utils/jwt');
+const { cookieOptions, issueSession } = require('../auth/session');
 const authenticate = require('../middleware/authenticate');
 const { audit } = require('../audit/auditLogger');
 const validate = require('../middleware/validate');
@@ -29,13 +28,6 @@ const loginLimiter = rateLimit({
       request_id: req.id,
     },
   }),
-});
-
-const cookieOptions = () => ({
-  httpOnly: true,
-  sameSite: 'lax',
-  secure: process.env.COOKIE_SECURE === 'true',
-  path: '/',
 });
 
 function invalidCredentials(req, res) {
@@ -151,15 +143,7 @@ router.post('/login', loginLimiter, validate(login), async (req, res, next) => {
       return invalidCredentials(req, res);
     }
 
-    const token = signToken(currentUser);
-    const { exp, iat } = jwt.decode(token);
-    if (exp <= iat) throw new Error('JWT_EXPIRES_IN must be at least one second.');
-    const maxAge = (exp - iat) * 1000;
-
-    res.cookie('fl_token', token, {
-      ...cookieOptions(),
-      maxAge,
-    });
+    const lifetime = issueSession(res, currentUser);
 
     await auditSafely({
       req,
@@ -174,7 +158,7 @@ router.post('/login', loginLimiter, validate(login), async (req, res, next) => {
     return res.status(200).json({
       username: currentUser.username,
       role: currentUser.role,
-      expires_in: exp - iat,
+      expires_in: lifetime,
     });
   } catch (error) {
     return next(error);
@@ -205,5 +189,7 @@ router.get('/me', authenticate, (req, res) => {
     role: req.user.role,
   });
 });
+
+router.use(require('./oauth.routes'));
 
 module.exports = router;
