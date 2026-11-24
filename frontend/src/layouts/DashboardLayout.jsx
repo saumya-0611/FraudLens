@@ -66,7 +66,11 @@ function DashboardLayout() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [logoutError, setLogoutError] = useState("");
     const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
-    const { status: alertSocketStatus, toasts } = useAlertSocket({ enabled: Boolean(user) && !mockMode });
+    const { status: alertSocketStatus, toasts } = useAlertSocket({
+        enabled: Boolean(user) && !mockMode,
+        role: user?.role,
+    });
+    const alertsLive = alertSocketStatus === "Connected" || alertSocketStatus === "Live";
 
     useEffect(() => {
         if (!menuOpen) return undefined;
@@ -159,7 +163,7 @@ function DashboardLayout() {
                 <div className="sidebar-bottom">
 
                     <div className="system-status">
-                        <span className={`status-dot ${mockMode ? "status-mock" : alertSocketStatus === "Connected" ? "online" : "offline"}`} />
+                        <span className={`status-dot ${mockMode ? "status-mock" : alertsLive ? "online" : "offline"}`} />
 
                         <div>
                             <strong>Live alerts</strong>
@@ -213,7 +217,7 @@ function DashboardLayout() {
                     </div>
 
                     <div className="topbar-profile">
-                        <span className="socket-status"><i className={alertSocketStatus === "Connected" ? "online" : "offline"}/>Alerts {alertSocketStatus}</span>
+                        <span className="socket-status"><i className={alertsLive ? "online" : "offline"}/>Alerts {alertSocketStatus}</span>
                         <span className="topbar-role">{user?.role}</span>
                     </div>
                 </header>
