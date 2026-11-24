@@ -72,7 +72,11 @@ class HybridPredictor:
             active = get_active_model_record()
             if active is None or not (get_model_store_dir() / active["version"] / "meta.json").exists():
                 active = train_and_register(version="v1", status_on_save="ACTIVE")
-            self.load_version(active["version"], active["sha256"])
+            try:
+                self.load_version(active["version"], active["sha256"])
+            except FileNotFoundError:
+                active = train_and_register(version="v1", status_on_save="ACTIVE")
+                self.load_version(active["version"], active["sha256"])
 
     def load_version(self, version: str, expected_sha256: str) -> None:
         """
@@ -125,7 +129,10 @@ class HybridPredictor:
         for item in instances:
             tx_ids.append(str(item["transaction_id"]))
             f_in = item.get("features") or {}
-            clean_f = {col: float(f_in.get(col, 0.0)) for col in FEATURE_COLUMNS}
+            clean_f = {}
+            for col in FEATURE_COLUMNS:
+                raw_v = float(f_in.get(col, 0.0))
+                clean_f[col] = raw_v if np.isfinite(raw_v) else 0.0
             # Ensure log_amount and amount_ratio have sensible defaults if omitted in minimal tests
             if "amount" in f_in and "log_amount" not in f_in:
                 clean_f["log_amount"] = float(np.log1p(max(0.0, clean_f["amount"])))
@@ -135,7 +142,7 @@ class HybridPredictor:
             raw_feats_list.append(clean_f)
             rows.append([clean_f[c] for c in FEATURE_COLUMNS])
 
-        X_mat = np.asarray(rows, dtype="float64")
+        X_mat = np.nan_to_num(np.asarray(rows, dtype="float64"), nan=0.0, posinf=1e6, neginf=-1e6)
         X_df = pd.DataFrame(X_mat, columns=FEATURE_COLUMNS)
 
         with self._lock:

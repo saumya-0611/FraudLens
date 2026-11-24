@@ -82,6 +82,7 @@ services:
         condition: service_healthy
     volumes:
       - model_store:/app/model_store
+      - ./data-science/datasets:/app/data-science/datasets:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health > /dev/null || exit 1"]
       interval: 5s

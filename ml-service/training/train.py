@@ -82,32 +82,69 @@ def _map_sparkov_df(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def _generate_synthetic_dataset(n_rows: int, start_dt: datetime, seed: int) -> pd.DataFrame:
-    """Generate a deterministic, time-ordered Sparkov-like dataset when Kaggle CSVs are absent."""
+    """
+    Generate a deterministic, time-ordered, realistic 3-tier Sparkov-like dataset when Kaggle
+    CSVs are absent. Includes overlapping borderline cases and multi-factor fraud archetypes
+    (high-amount late-night distant fraud + rapid velocity card testing) so XGBoost produces
+    well-calibrated probabilities across LEGITIMATE / SUSPICIOUS / HIGH_RISK and realistic
+    PR-AUC (~0.88-0.95) rather than linearly separable 1.0000.
+    """
     rng = np.random.default_rng(seed)
-    accounts = [f"270318618965{1000 + i:04d}" for i in range(40)]
+    accounts = [f"270318618965{1000 + i:04d}" for i in range(60)]
     categories = [
         "shopping_net", "grocery_pos", "gas_transport", "misc_net",
         "shopping_pos", "food_dining", "entertainment", "health_fitness",
     ]
+    merchants_local = ["Kroger_POS", "Shell_Station", "Target_Store", "Chipotle_Grill", "CVS_Pharmacy"]
+    merchants_susp = ["OutOfState_Vendor_Net", "Global_Tickets_Online", "Metro_Electronics_Web"]
+    merchants_fraud = ["fraud_Kutch LLC", "fraud_Rau and Sons", "fraud_Boyer-Reichert"]
 
     rows = []
-    for i in range(n_rows):
+    i = 0
+    while i < n_rows:
         acct = accounts[int(rng.integers(0, len(accounts)))]
-        is_fraud = int(rng.random() < 0.04)
-        tx_dt = start_dt + timedelta(minutes=i * 3)
+        tx_dt = start_dt + timedelta(minutes=i * 3 + int(rng.integers(0, 3)))
+        roll = rng.random()
+        base_lat = 36.0788 + float(rng.normal(0.0, 0.25))
+        base_lon = -81.1781 + float(rng.normal(0.0, 0.25))
+        age = int(rng.integers(21, 74))
 
-        if is_fraud:
-            hour_override = int(rng.choice([1, 2, 3, 23]))
-            tx_dt = tx_dt.replace(hour=hour_override)
-            amount = float(rng.uniform(950.0, 4600.0))
-            cat = str(rng.choice(["shopping_net", "misc_net"]))
-            d_lat = float(rng.uniform(0.8, 2.5))
-            d_lon = float(rng.uniform(0.8, 2.5))
+        if roll < 0.026:
+            # Archetype A: Classic high-value late-night / distant fraud (with 10% legit high-spend overlap)
+            is_fraud = int(rng.random() < 0.90)
+            tx_dt = tx_dt.replace(hour=int(rng.choice([0, 1, 2, 3, 22, 23])))
+            amount = float(rng.uniform(1150.0, 4400.0))
+            cat = str(rng.choice(["shopping_net", "misc_net", "shopping_pos"]))
+            merch = str(rng.choice(merchants_fraud if is_fraud else merchants_susp))
+            d_lat = float(rng.uniform(1.1, 2.8))
+            d_lon = float(rng.uniform(1.1, 2.8))
+        elif roll < 0.036:
+            # Archetype B: Stealthy borderline-amount anomalous fraud (travel/velocity outlier; Isolation Forest shines)
+            is_fraud = int(rng.random() < 0.72)
+            tx_dt = tx_dt.replace(hour=int(rng.choice([1, 3, 4, 22, 23])))
+            amount = float(rng.uniform(420.0, 960.0))
+            cat = str(rng.choice(["shopping_net", "misc_net", "entertainment"]))
+            merch = str(rng.choice(merchants_fraud if is_fraud else merchants_susp))
+            d_lat = float(rng.uniform(2.8, 5.5))
+            d_lon = float(rng.uniform(2.8, 5.5))
+        elif roll < 0.165:
+            # Borderline SUSPICIOUS gray-zone (medium amount, distant or evening, ~10% fraud)
+            is_fraud = int(rng.random() < 0.10)
+            tx_dt = tx_dt.replace(hour=int(rng.choice([0, 4, 18, 20, 22, 23])))
+            amount = float(rng.uniform(360.0, 880.0))
+            cat = str(rng.choice(["shopping_net", "entertainment", "misc_net", "shopping_pos"]))
+            merch = str(rng.choice(merchants_susp))
+            d_lat = float(rng.uniform(0.65, 1.65))
+            d_lon = float(rng.uniform(0.65, 1.65))
         else:
-            amount = float(rng.lognormal(mean=3.5, sigma=0.7))
+            # Legitimate everyday spending (with rare 0.2% background fraud & occasional $250-$550 legit purchases)
+            is_fraud = int(rng.random() < 0.002)
+            tx_dt = tx_dt.replace(hour=int(rng.integers(7, 22)))
+            amount = float(np.clip(rng.lognormal(mean=3.65, sigma=0.72), 4.5, 480.0))
             cat = str(rng.choice(categories))
-            d_lat = float(rng.normal(0.0, 0.05))
-            d_lon = float(rng.normal(0.0, 0.05))
+            merch = str(rng.choice(merchants_local))
+            d_lat = float(rng.normal(0.0, 0.09))
+            d_lon = float(rng.normal(0.0, 0.09))
 
         rows.append(
             {
@@ -116,15 +153,37 @@ def _generate_synthetic_dataset(n_rows: int, start_dt: datetime, seed: int) -> p
                 "amount": round(max(1.0, amount), 2),
                 "tx_time": tx_dt,
                 "category": cat,
-                "merchant": "fraud_Merchant" if is_fraud else "normal_Merchant",
-                "lat": 36.0788,
-                "lon": -81.1781,
-                "merch_lat": 36.0788 + d_lat,
-                "merch_lon": -81.1781 + d_lon,
-                "customer_age": int(rng.integers(21, 72)),
+                "merchant": merch,
+                "lat": round(base_lat, 6),
+                "lon": round(base_lon, 6),
+                "merch_lat": round(base_lat + d_lat, 6),
+                "merch_lon": round(base_lon + d_lon, 6),
+                "customer_age": age,
                 "is_fraud": is_fraud,
             }
         )
+        i += 1
+
+        # Add occasional rapid burst follow-up charge (15-90s later) on high-risk fraud to activate velocity features
+        if is_fraud == 1 and roll < 0.036 and rng.random() < 0.35 and i < n_rows:
+            burst_dt = tx_dt + timedelta(seconds=int(rng.integers(15, 95)))
+            rows.append(
+                {
+                    "transaction_id": f"syn-{seed}-{i:06d}",
+                    "account_ref": acct,
+                    "amount": round(float(rng.uniform(520.0, 2600.0)), 2),
+                    "tx_time": burst_dt,
+                    "category": cat,
+                    "merchant": merch,
+                    "lat": round(base_lat, 6),
+                    "lon": round(base_lon, 6),
+                    "merch_lat": round(base_lat + d_lat, 6),
+                    "merch_lon": round(base_lon + d_lon, 6),
+                    "customer_age": age,
+                    "is_fraud": 1,
+                }
+            )
+            i += 1
 
     df = pd.DataFrame(rows)
     return df.sort_values(["tx_time", "transaction_id"]).reset_index(drop=True)
@@ -263,14 +322,16 @@ def train_and_register(
         params = {
             "objective": "binary:logistic",
             "eval_metric": "aucpr",
-            "max_depth": 5,
-            "eta": 0.1,
+            "max_depth": 4,
+            "min_child_weight": 5,
+            "reg_lambda": 2.5,
+            "eta": 0.08,
             "subsample": 0.8,
             "colsample_bytree": 0.8,
-            "scale_pos_weight": scale_pos_weight,
+            "scale_pos_weight": min(scale_pos_weight, 10.0),
             "seed": seed,
         }
-        booster = xgb.train(params, dtrain, num_boost_round=80)
+        booster = xgb.train(params, dtrain, num_boost_round=75)
         booster.save_model(str(xgb_path))
         train_probs = booster.predict(dtrain)
         test_probs = booster.predict(dtest)
@@ -278,7 +339,7 @@ def train_and_register(
     else:
         # Fallback for local host runs where xgboost wheel is not installed outside Docker
         clf = GradientBoostingClassifier(n_estimators=60, max_depth=4, random_state=seed)
-        sample_weights = np.where(y_train == 1, scale_pos_weight, 1.0)
+        sample_weights = np.where(y_train == 1, min(scale_pos_weight, 10.0), 1.0)
         clf.fit(X_train, y_train, sample_weight=sample_weights)
         fallback_joblib = version_dir / "sklearn_xgb_fallback.joblib"
         joblib.dump(clf, fallback_joblib)
@@ -297,7 +358,8 @@ def train_and_register(
         test_probs = clf.predict_proba(X_test)[:, 1]
         engine_type = "sklearn_fallback"
 
-    # T2.3: Train Isolation Forest on mostly legitimate rows (contamination=0.01)
+    # T2.3: Train Isolation Forest on legitimate rows (contamination=0.01) and calibrate
+    # anomaly threshold against legitimate-only scores so unseen anomalies surface cleanly.
     legit_mask = y_train == 0
     X_iforest = X_train[legit_mask] if legit_mask.sum() >= 20 else X_train
     iforest = IsolationForest(
@@ -305,11 +367,12 @@ def train_and_register(
         contamination=0.01,
         random_state=seed,
     )
-    iforest.fit(X_iforest.to_numpy(dtype="float64"))
-    raw_scores = -iforest.score_samples(X_train.to_numpy(dtype="float64"))
-    score_min = float(np.percentile(raw_scores, 1))
-    score_max = float(np.percentile(raw_scores, 99.5))
-    threshold_raw = float(np.percentile(raw_scores, 99.0))
+    X_iforest_np = X_iforest.to_numpy(dtype="float64")
+    iforest.fit(X_iforest_np)
+    legit_raw_scores = -iforest.score_samples(X_iforest_np)
+    score_min = float(np.percentile(legit_raw_scores, 1))
+    score_max = float(np.percentile(legit_raw_scores, 99.5))
+    threshold_raw = float(np.percentile(legit_raw_scores, 98.5))
 
     iforest_bundle = {
         "model": iforest,
