@@ -1,13 +1,12 @@
-
 {
   "transaction_id": "TXN-1001",
   "account_masked": "XXXX-2095",
   "amount": 1850.0,
   "category": "shopping_net",
   "merchant": "Example Online Store",
-  "tx_time": "2026-11-20T03:12:45Z",
   "risk_category": "HIGH_RISK",
   "fraud_probability": 0.93,
+  "anomaly_score": 0.71,
   "is_anomaly": true,
   "model_version": "v1",
   "top_reasons": [
@@ -15,16 +14,30 @@
     { "feature": "tx_count_1h", "impact": 0.22, "text": "Several transactions occurred within one hour" }
   ],
   "features": {
-    "amount": 1850.0, "log_amount": 7.52, "hour": 3, "day_of_week": 4,
-    "is_night": 1, "category_code": 8, "distance_km": 41.2,
-    "customer_age": 34, "tx_count_1h": 3, "tx_count_24h": 5,
-    "secs_since_last_tx": 40, "avg_amount_prior": 48.3, "amount_ratio": 38.3
+    "amount": 1850.0,
+    "log_amount": 7.52,
+    "hour": 3,
+    "day_of_week": 4,
+    "is_night": 1,
+    "category_code": 8,
+    "distance_km": 41.2,
+    "customer_age": 34,
+    "tx_count_1h": 3,
+    "tx_count_24h": 5,
+    "secs_since_last_tx": 40,
+    "avg_amount_prior": 48.3,
+    "amount_ratio": 38.3
   },
-  "ingested_at": "2026-11-20T03:12:45.412Z",
-  "scored_at": "2026-11-20T03:12:46Z",
+  "timestamps": {
+    "tx_time": "2026-11-20T03:12:45Z",
+    "ingested_at": "2026-11-20T03:12:45.412Z",
+    "scored_at": "2026-11-20T03:12:46Z"
+  },
   "alert": {
     "alert_id": 17,
     "state": "NEW",
-    "resolution": null
+    "resolution": null,
+    "created_at": "2026-11-20T03:12:45Z",
+    "updated_at": null
   }
 }

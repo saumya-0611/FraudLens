@@ -8,7 +8,6 @@ import {
     Users,
     ScrollText,
     BrainCircuit,
-    Settings,
     LogOut,
     ShieldCheck,
     Activity,
@@ -16,7 +15,7 @@ import {
     X,
 } from "lucide-react";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useAlertSocket } from "../hooks/useAlertSocket";
 import "./DashboardLayout.css";
@@ -69,6 +68,15 @@ function DashboardLayout() {
     const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
     const { status: alertSocketStatus, toasts } = useAlertSocket({ enabled: Boolean(user) && !mockMode });
 
+    useEffect(() => {
+        if (!menuOpen) return undefined;
+        const closeOnEscape = event => {
+            if (event.key === "Escape") setMenuOpen(false);
+        };
+        document.addEventListener("keydown", closeOnEscape);
+        return () => document.removeEventListener("keydown", closeOnEscape);
+    }, [menuOpen]);
+
     const visibleNavigation = navigation.filter((item) =>
         item.roles.includes(user?.role)
     );
@@ -93,11 +101,21 @@ function DashboardLayout() {
                 type="button"
                 onClick={() => setMenuOpen(!menuOpen)}
                 aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+                aria-expanded={menuOpen}
+                aria-controls="primary-navigation"
             >
                 {menuOpen ? <X size={21} /> : <Menu size={21} />}
             </button>
 
             {/* Sidebar */}
+            {menuOpen && (
+                <button
+                    className="sidebar-backdrop"
+                    type="button"
+                    aria-label="Close navigation"
+                    onClick={() => setMenuOpen(false)}
+                />
+            )}
             <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""}`}>
 
                 <div className="sidebar-brand">
@@ -117,7 +135,7 @@ function DashboardLayout() {
                     WORKSPACE
                 </div>
 
-                <nav className="sidebar-navigation">
+                <nav className="sidebar-navigation" id="primary-navigation" aria-label="Workspace">
                     {visibleNavigation.map((item) => {
                         const Icon = item.icon;
 
@@ -141,25 +159,15 @@ function DashboardLayout() {
                 <div className="sidebar-bottom">
 
                     <div className="system-status">
-                        <span className="status-dot" />
+                        <span className={`status-dot ${mockMode ? "status-mock" : alertSocketStatus === "Connected" ? "online" : "offline"}`} />
 
                         <div>
-                            <strong>System status</strong>
-                            <small>Awaiting live connection</small>
+                            <strong>Live alerts</strong>
+                            <small>{mockMode ? "Disabled in mock mode" : alertSocketStatus}</small>
                         </div>
                     </div>
 
                     <div className="sidebar-divider" />
-
-                    <button
-                        className="sidebar-utility"
-                        type="button"
-                        disabled
-                        title="Settings will be available later"
-                    >
-                        <Settings size={18} />
-                        <span>Settings</span>
-                    </button>
 
                     <button
                         className="sidebar-utility"

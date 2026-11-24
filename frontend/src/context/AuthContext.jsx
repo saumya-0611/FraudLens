@@ -10,6 +10,7 @@ import { AuthContext } from "./auth-context";
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [authError, setAuthError] = useState("");
 
     // Check whether a user already has a valid session.
     useEffect(() => {
@@ -22,9 +23,14 @@ export function AuthProvider({ children }) {
                 if (active) {
                     setUser(currentUser);
                 }
-            } catch {
+            } catch (error) {
                 if (active) {
                     setUser(null);
+                    // Network failures are shown on the login screen; a normal 401
+                    // simply means there is no existing session.
+                    if (error?.code === "BACKEND_UNAVAILABLE") {
+                        setAuthError(error.message);
+                    }
                 }
             } finally {
                 if (active) {
@@ -47,6 +53,7 @@ export function AuthProvider({ children }) {
             body: JSON.stringify({ username, password }),
         });
 
+        setAuthError("");
         setUser({
             username: result.username,
             role: result.role,
@@ -57,13 +64,8 @@ export function AuthProvider({ children }) {
 
     // Log out and clear the current user.
     async function logout() {
-        try {
-            await request("/api/auth/logout", {
-                method: "POST",
-            });
-        } finally {
-            setUser(null);
-        }
+        await request("/api/auth/logout", { method: "POST" });
+        setUser(null);
     }
 
     return (
@@ -71,6 +73,7 @@ export function AuthProvider({ children }) {
             value={{
                 user,
                 loading,
+                authError,
                 login,
                 logout,
             }}

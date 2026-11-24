@@ -1,10 +1,8 @@
 # FraudLens frontend
 
-The frontend is a React and Vite dashboard for reviewing fraud monitoring activity. It uses the API contract in `../docs/CONTRACTS.md`, with role based navigation for ADMIN, ANALYST and VIEWER accounts.
+React and Vite application for transaction monitoring, fraud alerts, and administrator tools. The UI uses the Aurora design tokens in `src/index.css` and follows the API definitions in `../docs/CONTRACTS.md`.
 
-## Install and run
-
-From PowerShell:
+## Run locally
 
 ```powershell
 cd frontend
@@ -12,61 +10,37 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-Open the local URL printed by Vite (normally `http://localhost:5173`). The demo mock accounts are `admin` / `admin123`, `analyst` / `analyst123` and `viewer` / `viewer123`. These are frontend mock credentials only.
-
-## Mock mode
-
-`frontend/.env.local` can contain:
-
-```dotenv
-VITE_USE_MOCKS=true
-VITE_PROXY_TARGET=http://localhost:5000
-```
-
-Mock mode reads the sample JSON in `src/mocks/` and simulates the documented routes in `src/mocks/mockApi.js`. Alert state and created users stay in memory until a page refresh. Mock mode does not simulate a WebSocket server, so its alert socket status remains disconnected.
+The local URL is normally `http://localhost:5173`. To use the demonstration data, set `VITE_USE_MOCKS=true` in `.env.local` before starting Vite. Mock-only accounts are `admin` / `admin123`, `analyst` / `analyst123`, and `viewer` / `viewer123`. Mock users, alert changes, and model actions are held in memory; they reset when the app reloads. Mock retraining uses fixture outcomes and does not train a model. Mock mode has no WebSocket server.
 
 ## Real backend mode
 
-Set `VITE_USE_MOCKS=false` in `frontend/.env.local`, set `VITE_PROXY_TARGET` to the backend address reachable by the Vite dev server (normally `http://localhost:5000`), and start the backend plus its required services. Restart Vite after changing environment values. The frontend sends relative `/api/...` requests with cookies and opens `/ws/alerts` on the same host; JavaScript never reads or stores the auth cookie.
+Set these values in `.env.local`, then restart Vite:
 
-## Production build
+```dotenv
+VITE_USE_MOCKS=false
+VITE_PROXY_TARGET=http://localhost:5000
+```
+
+The frontend sends relative `/api/...` requests with `credentials: "include"`. Vite forwards `/api` and `/ws` to the configured backend target. Browser code never reads or stores the authentication cookie or a token. Network failures display a backend connection message; the app does not fall back to mock data. Production builds reject `VITE_USE_MOCKS=true`.
+
+The Vite proxy is for local development. A production reverse proxy must send `/api` and `/ws` to the backend, preserve cookie forwarding and WebSocket upgrades, and serve `index.html` for client routes such as `/home`, `/dashboard`, and `/transactions` so direct refresh works.
+
+## Quality commands
 
 ```powershell
 cd frontend
-npm.cmd ci
+npm.cmd run lint
 npm.cmd run build
 npm.cmd run preview
 ```
 
-`npm.cmd run lint` runs Oxlint. The production build output is written to `frontend/dist/`.
+The package currently has lint and build scripts but no standalone frontend test script. The mock-mode screenshots currently present are in `evidence/mock-mode/`; they are demonstration captures and may not reflect the latest UI changes.
 
-## Frontend screens
+## Screens
 
-- **Overview:** platform service status, summary figures, 60-minute activity chart, recent alerts and model drift status.
-- **Transactions:** risk, date and text filters, paging, plus a transaction detail panel with model reasons and features.
-- **Fraud alerts:** ADMIN and ANALYST case review with the documented resolution choices.
-- **User management, audit logs and model management:** ADMIN-only access controls and model operations.
-
-## Suggested presentation outline
-
-Use verified project results from the team reports; do not infer accuracy, latency or throughput from demo data.
-
-1. Problem: financial transaction fraud creates a need for timely, explainable review.
-2. Proposed system: FraudLens monitors transactions and surfaces risk and alert context.
-3. Architecture: React/Vite frontend, Express API, PostgreSQL, Kafka, Spark streaming and internal FastAPI model service.
-4. Technology stack: list the technologies above and the libraries used by each service.
-5. Transaction flow: simulator or source → API → Kafka → streaming feature calculation → ML scoring → database and fraud alert → dashboard/WebSocket.
-6. Frontend walkthrough: sign in by role, inspect overview, open a transaction, review an alert and show admin screens.
-7. Team roles: Lead (AI/ML, DevOps and streaming), Riya (backend routes and data science), Amrita (React frontend), Shivansh (security, authentication and audit).
-8. Results: insert confirmed model evaluation, drift, security and load-test results from the team's reports.
-9. Demo and limitations: demonstrate a seeded transaction/alert flow and identify any services or endpoints not yet integrated.
-
-## Manual walkthrough
-
-1. Run Vite in mock mode and sign in as `admin` to visit all pages.
-2. Open Transactions, filter for HIGH_RISK and open TXN-1001; inspect “Why flagged” and the collapsed feature list. Open TXN-1004 to see a pending result.
-3. Open Fraud Alerts, move a NEW alert to UNDER_REVIEW, then resolve it and choose a resolution.
-4. In Users, create an account and toggle its status. In Audit Logs, filter by action or username. In Models, run the mock drift/retrain/activate flows.
-5. Sign out and sign in as `viewer`; confirm only Overview and Transactions are available.
-
-Screenshots should be captured from the running app after the team confirms the final demo data. No screenshots are checked in by this implementation because this environment has no browser capture runtime.
+- `/` — login
+- `/home` — public landing page
+- `/dashboard` — monitoring summary, health, latency, trends, and recent alerts
+- `/transactions` — filters, pagination, and transaction detail
+- `/alerts` — ADMIN and ANALYST review and resolution
+- `/admin/users`, `/admin/audit-logs`, `/admin/models` — ADMIN tools
