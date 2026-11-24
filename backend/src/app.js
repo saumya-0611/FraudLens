@@ -32,7 +32,12 @@ app.use('/api', discardMalformedForwarding, denyForeignBrowserWrites, apiLimiter
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
-// Health check (no /api prefix, public).
+// Root & health check (no /api prefix, public).
+app.get('/', (req, res) => res.json({
+  status: 'API is running',
+  environment: process.env.NODE_ENV || 'development',
+  message: 'Fraud Detection API is operational',
+}));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // OpenAPI 3.0 JSON spec & Swagger UI (/api-docs and /api-docs/openapi.json)

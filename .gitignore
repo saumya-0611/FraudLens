@@ -26,3 +26,4 @@ spark-checkpoints/
 .vscode/
 pyrightconfig.json
 pyproject.toml
+.neon

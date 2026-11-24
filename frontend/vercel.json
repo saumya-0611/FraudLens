@@ -2,19 +2,19 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://fraudlens-backend.onrender.com/api/:path*"
+      "destination": "https://fraudlens-backend-j17p.onrender.com/api/:path*"
     },
     {
       "source": "/health",
-      "destination": "https://fraudlens-backend.onrender.com/health"
+      "destination": "https://fraudlens-backend-j17p.onrender.com/health"
     },
     {
       "source": "/api-docs",
-      "destination": "https://fraudlens-backend.onrender.com/api-docs"
+      "destination": "https://fraudlens-backend-j17p.onrender.com/api-docs"
     },
     {
       "source": "/api-docs/:path*",
-      "destination": "https://fraudlens-backend.onrender.com/api-docs/:path*"
+      "destination": "https://fraudlens-backend-j17p.onrender.com/api-docs/:path*"
     },
     {
       "source": "/(.*)",

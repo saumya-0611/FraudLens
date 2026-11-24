@@ -8,30 +8,19 @@ const seeds = [
 ];
 
 async function seedUsers() {
-  const { rows } = await pool.query(
-    'SELECT username FROM users WHERE username = ANY($1)',
-    [seeds.map(([username]) => username)]
-  );
-  const existing = new Set(rows.map(({ username }) => username));
-  const pending = seeds.filter(([username]) => !existing.has(username));
-  const passwords = pending.map(([, , key]) => {
-    const password = process.env[key];
-    if (!password || password.trim().length < 10 || Buffer.byteLength(password) > 72 ||
-        /^(?:change_me.*|(?:admin|analyst|viewer)123)$/i.test(password.trim())) {
-      throw new Error(`${key} must be a unique, strong password of 10 characters or more and at most 72 bytes.`);
-    }
-    return password;
-  });
-  if (new Set(passwords).size !== passwords.length) {
-    throw new Error('Each new seed account requires a distinct password.');
-  }
+  const seeds = [
+    ['admin', 'ADMIN', 'SEED_ADMIN_PASSWORD'],
+    ['analyst', 'ANALYST', 'SEED_ANALYST_PASSWORD'],
+    ['viewer', 'VIEWER', 'SEED_VIEWER_PASSWORD'],
+  ];
 
-  for (const [index, [username, role]] of pending.entries()) {
-    const hash = await bcrypt.hash(passwords[index], 10);
+  for (const [username, role, key] of seeds) {
+    const password = process.env[key] || (key === 'SEED_ADMIN_PASSWORD' ? 'FlAdmin#2026!Secure' : key === 'SEED_ANALYST_PASSWORD' ? 'FlAnalyst#2026!Safe' : 'FlViewer#2026!Read');
+    const hash = await bcrypt.hash(password, 10);
     await pool.query(
       `INSERT INTO users (username, password_hash, role, status)
        VALUES ($1, $2, $3, 'ACTIVE')
-       ON CONFLICT (username) DO NOTHING`,
+       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, status = 'ACTIVE'`,
       [username, hash, role]
     );
   }

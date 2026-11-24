@@ -1,6 +1,7 @@
 // Idempotent schema bootstrap for managed cloud PostgreSQL (e.g. Render / Neon)
 // Matches database/init.sql (CONTRACTS.md Section 3) 1:1 with IF NOT EXISTS guards.
-const { query } = require('../src/config/db');
+const { unpooledQuery, query } = require('../src/config/db');
+const runQuery = unpooledQuery || query;
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -95,8 +96,20 @@ const SCHEMA_STATEMENTS = [
 
 async function ensureSchema() {
   for (const stmt of SCHEMA_STATEMENTS) {
-    await query(stmt);
+    await runQuery(stmt);
   }
+}
+
+if (require.main === module) {
+  ensureSchema()
+    .then(() => {
+      console.log('Schema bootstrap completed successfully on Neon PostgreSQL.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('Schema bootstrap failed:', err);
+      process.exit(1);
+    });
 }
 
 module.exports = { ensureSchema };

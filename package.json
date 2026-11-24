@@ -1,0 +1,14 @@
+{
+  "name": "fraudlens",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix frontend run build",
+    "db:bootstrap": "node backend/scripts/bootstrapSchema.js",
+    "seed": "npm --prefix backend run seed",
+    "start": "node backend/src/server.js"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/env": "^2.1.9"
+  }
+}

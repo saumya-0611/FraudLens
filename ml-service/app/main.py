@@ -43,6 +43,15 @@ app = FastAPI(
 )
 
 
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "fraudlens-ml-service",
+        "message": "ML Service is operational (XGBoost + Isolation Forest)",
+    }
+
+
 class PredictInstance(BaseModel):
     transaction_id: str
     features: Dict[str, float] = Field(default_factory=dict)
