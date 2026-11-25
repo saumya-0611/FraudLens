@@ -15,6 +15,13 @@ jest.mock('../auth/oidc', () => ({
   providerClient: jest.fn(),
 }));
 
+jest.mock('../auth/githubOAuth', () => ({
+  enabledGitHub: () => ({
+    name: 'github', origin: 'https://fraudlens.test', redirectUri: 'https://fraudlens.test/api/auth/github/callback',
+  }),
+  createGitHubClient: (provider) => require('../auth/oidc').providerClient(provider),
+}));
+
 const { query } = require('../config/db');
 const { audit } = require('../audit/auditLogger');
 const store = require('../auth/oauthStore');
@@ -25,7 +32,7 @@ const authorize = require('../middleware/authorize');
 
 const app = express().use(cookieParser()).use('/api/auth', router);
 app.get('/admin-fixture', authenticate, authorize('ADMIN'), (_req, res) => res.status(204).end());
-const origins = { google: 'https://accounts.google.com', linkedin: 'https://www.linkedin.com/oauth' };
+const origins = { google: 'https://accounts.google.com', linkedin: 'https://www.linkedin.com/oauth', github: 'https://github.com' };
 const viewer = { id: 51, username: 'social-local-viewer', role: 'VIEWER', status: 'ACTIVE' };
 const admin = { id: 52, username: 'existing-admin', role: 'ADMIN', status: 'ACTIVE' };
 const verify = jest.fn();
@@ -94,7 +101,7 @@ function callback(provider, attempt, options = {}) {
   }).set('Cookie', [attempt.cookie, options.session].filter(Boolean).join('; '));
 }
 
-test.each(['google', 'linkedin'])('%s registers and issues the normal VIEWER session', async (provider) => {
+test.each(['google', 'linkedin', 'github'])('%s registers and issues the normal VIEWER session', async (provider) => {
   const attempt = await start(provider);
   const res = await callback(provider, attempt, { query: { role: 'ADMIN', next: 'https://example.invalid' } });
   expect(res.status).toBe(303);
@@ -119,9 +126,9 @@ test('a returning account retains its local role and does not register again', a
   expect(audit.mock.calls.map(([event]) => event.action)).toEqual(['LOGIN_SUCCESS']);
 });
 
-test('missing schema keeps both providers unavailable', async () => {
+test('missing schema keeps all providers unavailable', async () => {
   store.ready.mockResolvedValue(false);
-  expect((await client().get(prefix + 'providers')).body).toEqual({ google: false, linkedin: false });
+  expect((await client().get(prefix + 'providers')).body).toEqual({ google: false, linkedin: false, github: false });
   const res = await client().get(prefix + 'google/start');
   expect(res.headers.location).toBe('/?oauth_error=unavailable');
   expect(providerClient).not.toHaveBeenCalled();
@@ -187,4 +194,22 @@ test('linking requires an authenticated, same-origin POST and the same session a
   expect(store.resolveIdentity).toHaveBeenCalledWith(expect.anything(), admin.id);
   expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'EXTERNAL_IDENTITY_LINKED' }));
   expect(linked.headers['set-cookie'].some((value) => value.startsWith('fl_token='))).toBe(false);
+});
+
+test('GitHub migration readiness does not gate Google or LinkedIn', async () => {
+  store.ready.mockImplementation(async (provider) => provider !== 'github');
+  expect((await client().get(prefix + 'providers')).body).toEqual({ google: true, linkedin: true, github: false });
+  expect((await client().get(prefix + 'github/start')).headers.location).toBe('/?oauth_error=unavailable');
+  expect(providerClient).not.toHaveBeenCalled();
+});
+
+test('GitHub denial consumes the browser attempt and returns a safe fixed error', async () => {
+  const attempt = await start('github');
+  const denial = await client().get(prefix + 'github/callback')
+    .query({ state: attempt.state, error: 'access_denied', error_description: 'private-fixture' })
+    .set('Cookie', attempt.cookie);
+  expect(denial.headers.location).toBe('/?oauth_error=denied');
+  expect(denial.text).not.toContain('private-fixture');
+  expect((await callback('github', attempt)).headers.location).toBe('/?oauth_error=state');
+  expect(verify).not.toHaveBeenCalled();
 });
