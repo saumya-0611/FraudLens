@@ -205,11 +205,14 @@
             "description": "Active session profile",
             "content": {
               "application/json": {
-                "example": {
-                  "id": 1,
-                  "username": "admin",
-                  "role": "ADMIN",
-                  "status": "ACTIVE"
+                "schema": {
+                  "type": "object",
+                  "required": ["username", "role"],
+                  "properties": {
+                    "username": { "type": "string" },
+                    "role": { "type": "string", "enum": ["ADMIN", "ANALYST", "VIEWER"] },
+                    "display_name": { "type": "string", "maxLength": 80, "description": "Profile name from a verified Google sign-in, when available." }
+                  }
                 }
               }
             }

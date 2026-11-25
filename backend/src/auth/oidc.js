@@ -5,6 +5,7 @@ const providers = {
     issuer: 'https://accounts.google.com',
     authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
     token_endpoint: 'https://oauth2.googleapis.com/token',
+    userinfo_endpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
     jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
     code_challenge_methods_supported: ['S256'],
   },
@@ -110,7 +111,16 @@ async function createProviderClient(provider, customFetch) {
           (Array.isArray(claims.aud) && claims.aud.length > 1 && claims.azp !== provider.clientId)) {
         throw new Error('Invalid identity claims.');
       }
-      return { issuer: claims.iss, subject: claims.sub };
+      const identity = { issuer: claims.iss, subject: claims.sub };
+      if (provider.name !== 'google') return identity;
+
+      let displayName = typeof claims.name === 'string' ? claims.name.trim() : '';
+      if (!displayName) {
+        // Google may omit name from the ID token. fetchUserInfo verifies the same subject.
+        const profile = await oidc.fetchUserInfo(config, tokens.access_token, claims.sub).catch(() => null);
+        if (typeof profile?.name === 'string') displayName = profile.name.trim();
+      }
+      return displayName ? { ...identity, displayName } : identity;
     },
   };
 }

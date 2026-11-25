@@ -32,6 +32,26 @@ test('configuration defaults off and requires the exact secure callback', () => 
     GITHUB_OAUTH_REDIRECT_URI: insecure + '/api/auth/github/callback' })).toThrow();
 });
 
+test('accepts the published GitHub authorization issuer and retains the stored identity namespace', async () => {
+  const { fetch, json, client, callback, attempt } = setup();
+  callback.searchParams.set('iss', 'https://github.com/login/oauth');
+  fetch.mockResolvedValueOnce(json(token)).mockResolvedValueOnce(json({ id: 12345 }));
+  await expect(client.verify(callback, attempt)).resolves.toEqual({
+    issuer: 'https://github.com', subject: '12345',
+  });
+});
+
+test.each([
+  ['https://provider.invalid'],
+  [''],
+  ['https://github.com/login/oauth', 'https://github.com/login/oauth'],
+])('rejects unexpected or duplicate GitHub authorization issuers %#', async (...issuers) => {
+  const { fetch, client, callback, attempt } = setup();
+  for (const issuer of issuers) callback.searchParams.append('iss', issuer);
+  await expect(client.verify(callback, attempt)).rejects.toMatchObject({ code: 'GITHUB_CALLBACK_ISSUER' });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 test('uses S256, fixed HTTPS endpoints and authenticates only the numeric ID', async () => {
   const { fetch, json, client, start, callback, attempt } = setup();
   const authorization = new URL(start.location);

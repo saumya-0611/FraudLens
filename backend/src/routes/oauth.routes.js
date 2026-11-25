@@ -26,7 +26,7 @@ const verificationErrors = new Set([
   'OAUTH_TIMEOUT', 'OAUTH_ABORT', 'OAUTH_INVALID_RESPONSE', 'OAUTH_RESPONSE_IS_NOT_JSON',
   'OAUTH_RESPONSE_IS_NOT_CONFORM', 'OAUTH_JWT_CLAIM_COMPARISON_FAILED',
   'OAUTH_JWT_TIMESTAMP_CHECK_FAILED', 'OAUTH_KEY_SELECTION_FAILED',
-  'GITHUB_CALLBACK_INVALID', 'GITHUB_TOKEN_REQUEST', 'GITHUB_TOKEN_RESPONSE',
+  'GITHUB_CALLBACK_INVALID', 'GITHUB_CALLBACK_ISSUER', 'GITHUB_TOKEN_REQUEST', 'GITHUB_TOKEN_RESPONSE',
   'GITHUB_TOKEN_EXPIRY', 'GITHUB_TOKEN_SCOPE', 'GITHUB_TOKEN_FORMAT',
   'GITHUB_USER_REQUEST', 'GITHUB_USER_RESPONSE', 'GITHUB_USER_ID',
 ]);
@@ -190,13 +190,14 @@ router.get('/:provider/callback', async (req, res) => {
     }
     if (kind === 'registered') await record(req, provider, 'USER_CREATED', user, { provisioning: 'social' });
     stage = 'session_issue';
-    issueSession(res, user);
+    issueSession(res, provider.name === 'google' ? { ...user, display_name: identity.displayName } : user);
     await record(req, provider, 'LOGIN_SUCCESS', user);
     return res.redirect(303, '/dashboard');
   } catch (failure) {
     const reason = failureReason(stage, failure);
     logCallbackFailure(req, provider, stage, reason);
     if (attempt) await record(req, provider, 'LOGIN_FAILURE', null, { stage, reason });
+    if (provider.name === 'linkedin' && reason === 'OIDC_NONCE_MISSING') return result(res, 'linkedin_unavailable');
     return result(res, 'provider');
   }
 });

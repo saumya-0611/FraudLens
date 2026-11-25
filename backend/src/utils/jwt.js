@@ -14,6 +14,13 @@ function getJwtSecret() {
   return secret;
 }
 
+function normalizeDisplayName(value) {
+  if (typeof value !== 'string') return '';
+  const cleaned = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return Array.from(cleaned).slice(0, 80).join('').trimEnd();
+}
+
 function signToken(user) {
   if (
     !user ||
@@ -25,10 +32,12 @@ function signToken(user) {
     throw new Error('Invalid user data for JWT signing.');
   }
 
+  const displayName = normalizeDisplayName(user.display_name);
   return jwt.sign(
     {
       username: user.username,
       role: user.role,
+      ...(displayName ? { display_name: displayName } : {}),
     },
     getJwtSecret(),
     {
@@ -81,10 +90,12 @@ function verifyRequestCookie(req) {
       return null;
     }
 
+    const displayName = normalizeDisplayName(payload.display_name);
     return {
       id,
       username: payload.username,
       role: payload.role,
+      ...(displayName ? { display_name: displayName } : {}),
     };
   } catch {
     // Invalid, expired or tampered tokens never authenticate.

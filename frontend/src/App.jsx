@@ -35,6 +35,7 @@ const socialErrors = new Map([
     ["disabled", "This FraudLens account is disabled. Contact your administrator."],
     ["state", "This sign-in attempt expired or could not be verified. Please try again."],
     ["provider", "Social sign-in could not be completed. Please try again."],
+    ["linkedin_unavailable", "LinkedIn sign-in is currently unavailable. Please use Google or your FraudLens username."],
     ["unavailable", "That sign-in provider is currently unavailable."],
     ["conflict", "That social account is already linked. Contact your administrator for help."],
     ["limited", "Too many sign-in attempts. Wait a minute and try again."],

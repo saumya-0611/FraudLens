@@ -78,8 +78,7 @@ beforeEach(() => {
       location: origins[name] + '/authorize?state=' + state, nonce: 'fixture-nonce', verifier: null,
     }),
     verify: async (url, attempt) => {
-      await verify(url, attempt);
-      return { issuer: origins[name], subject: 'stable-subject' };
+      return { issuer: origins[name], subject: 'stable-subject', ...await verify(url, attempt) };
     },
   }));
   store.resolveIdentity.mockResolvedValue({ kind: 'registered', user: viewer });
@@ -134,6 +133,34 @@ test('a returning account retains its local role and does not register again', a
   const res = await callback('google', await start());
   expect(res.headers.location).toBe('/dashboard');
   expect(audit.mock.calls.map(([event]) => event.action)).toEqual(['LOGIN_SUCCESS']);
+});
+
+test('Google callback passes the profile name into the session without changing the local identity', async () => {
+  verify.mockResolvedValueOnce({ displayName: 'Fixture Person' });
+  store.resolveIdentity.mockResolvedValueOnce({ kind: 'login', user: viewer });
+  const res = await callback('google', await start());
+
+  expect(res.headers.location).toBe('/dashboard');
+  const cookie = res.headers['set-cookie'].find(value => value.startsWith('fl_token='));
+  expect(verifyRequestCookie({ headers: { cookie } })).toEqual({
+    id: viewer.id, username: viewer.username, role: viewer.role, display_name: 'Fixture Person',
+  });
+});
+
+test('LinkedIn with a missing nonce cannot create an identity or a session', async () => {
+  const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    verify.mockRejectedValueOnce(Object.assign(new Error('Invalid response', {
+      cause: new Error('JWT "nonce" (nonce) claim missing'),
+    }), { code: 'OAUTH_INVALID_RESPONSE' }));
+    const res = await callback('linkedin', await start('linkedin'));
+
+    expect(res.headers.location).toBe('/?oauth_error=linkedin_unavailable');
+    expect(store.resolveIdentity).not.toHaveBeenCalled();
+    expect(res.headers['set-cookie'].some(value => value.startsWith('fl_token='))).toBe(false);
+  } finally {
+    warning.mockRestore();
+  }
 });
 
 test('missing schema keeps all providers unavailable', async () => {

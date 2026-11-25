@@ -320,7 +320,7 @@ Paging: `?page=1&page_size=20` -> `{ "items": [...], "page": 1, "page_size": 20,
 | GET | `/ready` (no `/api` prefix) | public | | 200 when PostgreSQL, authenticated ML readiness, and any required Kafka connections are available, otherwise 503 |
 | POST | `/api/auth/login` | public | `{username,password}` | 200 `{username,role,expires_in}` + cookie |
 | POST | `/api/auth/logout` | any | | 204, clears cookie |
-| GET | `/api/auth/me` | any | | `{username,role}` |
+| GET | `/api/auth/me` | any | | `{username,role,display_name?}`. Google sign-ins can supply a session display name. |
 | GET | `/api/auth/providers` | public | | Google and LinkedIn availability flags |
 | GET | `/api/auth/:provider/start` | public | | 303 to the provider or safe error page |
 | GET | `/api/auth/:provider/callback` | public browser callback | `state, code, error, iss` | 303 to dashboard or safe error page |

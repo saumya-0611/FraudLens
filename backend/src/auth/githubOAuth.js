@@ -2,8 +2,9 @@ const { createHash, randomBytes } = require('node:crypto');
 const { parseOrigin } = require('../middleware/browserRequest');
 
 const GITHUB_NAMESPACE = 'https://github.com';
-const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
-const TOKEN_URL = 'https://github.com/login/oauth/access_token';
+const AUTHORIZATION_ISSUER = 'https://github.com/login/oauth';
+const AUTHORIZE_URL = AUTHORIZATION_ISSUER + '/authorize';
+const TOKEN_URL = AUTHORIZATION_ISSUER + '/access_token';
 const USER_URL = 'https://api.github.com/user';
 const verifierPattern = /^[A-Za-z0-9_-]{43}$/;
 
@@ -62,9 +63,13 @@ function createGitHubClient(provider, fetch = globalThis.fetch) {
     async verify(callback, attempt) {
       const code = callback.searchParams.get('code');
       if (callback.origin + callback.pathname !== provider.redirectUri ||
-          callback.searchParams.get('state') !== attempt.state || !code || callback.searchParams.has('iss') ||
+          callback.searchParams.get('state') !== attempt.state || !code ||
           !verifierPattern.test(attempt.code_verifier ?? '')) {
         throw githubError('Invalid GitHub OAuth callback or PKCE verifier.', 'GITHUB_CALLBACK_INVALID');
+      }
+      const issuers = callback.searchParams.getAll('iss');
+      if (issuers.length > 1 || (issuers.length === 1 && issuers[0] !== AUTHORIZATION_ISSUER)) {
+        throw githubError('Unexpected GitHub OAuth authorization issuer.', 'GITHUB_CALLBACK_ISSUER');
       }
       const token = await responseJson(fetch, TOKEN_URL, {
         method: 'POST',
