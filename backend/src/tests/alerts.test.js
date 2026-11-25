@@ -72,6 +72,19 @@ describe('Alerts Route Tests', () => {
     expect(response.body.state).toBe('UNDER_REVIEW');
     expect(response.body).not.toHaveProperty('account_ref');
     expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]).toEqual([expect.stringContaining('AND state = $5'), ['UNDER_REVIEW', null, null, '1', 'NEW']]);
+  });
+
+  test('PATCH returns a conflict when another update wins the state transition', async () => {
+    query.mockResolvedValueOnce({ rows: [{ alert_id: 1, state: 'NEW' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app)
+      .patch('/api/alerts/1').set('Cookie', cookie)
+      .send({ state: 'RESOLVED', resolution: 'FALSE_POSITIVE' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('CONFLICT');
   });
 
   test('PATCH /api/alerts/:id resolves alert with valid resolution', async () => {

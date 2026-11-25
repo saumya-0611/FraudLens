@@ -14,7 +14,7 @@ import time
 import pandas as pd
 
 from streaming.jobs.consumer_fallback import run_consumer
-from streaming.jobs.pipeline import process_batch
+from streaming.jobs.pipeline import process_batch, validate_runtime_config
 
 
 def _start_heartbeat_daemon(interval_sec: int = 15) -> None:
@@ -106,6 +106,7 @@ def run_spark_stream() -> None:
 
 
 if __name__ == "__main__":
+    validate_runtime_config()
     _start_heartbeat_daemon(interval_sec=15)
     engine = os.getenv("STREAM_ENGINE", "spark").lower()
     if engine == "fallback":

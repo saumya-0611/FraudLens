@@ -6,60 +6,82 @@ Independent of Spark so it can be called from either:
   - Plain Python Kafka consumer fallback (streaming/jobs/consumer_fallback.py)
   - Unit tests with a pandas DataFrame
 """
+from contextlib import closing
 from datetime import datetime, timezone
 import importlib
 import json
+import math
 import os
-from pathlib import Path
+from threading import Lock
 import time
 from typing import Any, Dict, List, Tuple
 
 import httpx
 import pandas as pd
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extensions import parse_dsn
 
 from shared.fraud_features import FEATURE_COLUMNS, build_features
+from streaming.jobs.classify import classify_risk, load_thresholds
+from streaming.jobs.writer import (
+    insert_fraud_results_idempotent,
+    insert_high_risk_alerts,
+    insert_transactions_idempotent,
+    upsert_heartbeat,
+)
 
 REQUIRED_FIELDS = ("transaction_id", "account_ref", "amount", "tx_time", "category", "ingested_at")
-THRESHOLDS_PATH = Path(__file__).resolve().parents[2] / "shared" / "thresholds.json"
+TRANSACTION_COLUMNS = (
+    "transaction_id", "account_ref", "amount", "tx_time", "category", "merchant",
+    "lat", "lon", "merch_lat", "merch_lon", "customer_age", "ingested_at",
+)
 
 _producer: Any = None
+_producer_lock = Lock()
+
+
+def _required_database_url() -> str:
+    value = os.getenv("DATABASE_URL", "").strip()
+    if not value:
+        raise RuntimeError("DATABASE_URL must be explicitly configured for streaming.")
+    try:
+        settings = parse_dsn(value)
+    except psycopg2.ProgrammingError:
+        raise RuntimeError("DATABASE_URL is invalid; configure a PostgreSQL connection string.") from None
+    if not (settings.get("host") or settings.get("hostaddr")) or not settings.get("dbname") or not settings.get("user"):
+        raise RuntimeError("DATABASE_URL must specify a PostgreSQL host, database and user.")
+    return value
+
+
+def _required_ml_token() -> str:
+    token = os.getenv("INTERNAL_ML_TOKEN", "")
+    if not token or token != token.strip() or any(not 32 <= ord(char) <= 126 for char in token):
+        raise RuntimeError("INTERNAL_ML_TOKEN must be explicitly configured as a valid HTTP header value.")
+    return token
+
+
+def validate_runtime_config() -> str:
+    """Check required streaming settings before opening a network connection."""
+    database_url = _required_database_url()
+    _required_ml_token()
+    return database_url
 
 
 def get_kafka_producer() -> Any:
     """Lazy singleton Kafka producer for fraud-alerts and transactions-dlq."""
     global _producer
-    if _producer is None:
-        kafka_mod = importlib.import_module("kafka")
-        brokers = os.getenv("KAFKA_BROKERS", "kafka:9092").split(",")
-        _producer = kafka_mod.KafkaProducer(
-            bootstrap_servers=brokers,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            key_serializer=lambda k: k.encode("utf-8") if k else None,
-        )
-    return _producer
-
-
-def load_thresholds() -> Tuple[float, float]:
-    """Read high and low risk thresholds from shared/thresholds.json (CONTRACTS §7)."""
-    with open(THRESHOLDS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return float(data.get("high", 0.80)), float(data.get("low", 0.40))
-
-
-def classify_risk(prob: float, is_anomaly: bool, high: float, low: float) -> str:
-    """Decision logic (FR-08, CONTRACTS §7)."""
-    if prob >= high or (prob >= low and is_anomaly):
-        return "HIGH_RISK"
-    if prob >= low or is_anomaly:
-        return "SUSPICIOUS"
-    return "LEGITIMATE"
-
-
-def mask_account(account_ref: str) -> str:
-    """Masking rule (CONTRACTS §2): never expose full account_ref in alerts."""
-    return "XXXX-" + str(account_ref or "")[-4:]
+    with _producer_lock:
+        if _producer is None:
+            kafka_mod = importlib.import_module("kafka")
+            brokers = os.getenv("KAFKA_BROKERS", "kafka:9092").split(",")
+            _producer = kafka_mod.KafkaProducer(
+                bootstrap_servers=brokers,
+                acks="all",
+                max_block_ms=5000,
+                value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+                key_serializer=lambda key: key.encode("utf-8") if key else None,
+            )
+        return _producer
 
 
 def _validate_rows(pdf: pd.DataFrame) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
@@ -105,16 +127,53 @@ def _validate_rows(pdf: pd.DataFrame) -> Tuple[pd.DataFrame, List[Dict[str, Any]
     return valid_df, dlq_messages
 
 
+def _parse_predictions(body: Any, expected_ids: set[str]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+    if not isinstance(body, dict):
+        raise ValueError("Invalid ML prediction response.")
+    version, predictions = body.get("model_version"), body.get("predictions")
+    if not isinstance(version, str) or not version.strip() or len(version) > 30 or not isinstance(predictions, list):
+        raise ValueError("Invalid ML version or predictions.")
+
+    parsed = {}
+    for item in predictions:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid ML prediction.")
+        tx_id, probability = item.get("transaction_id"), item.get("fraud_probability")
+        reasons = item.get("top_reasons")
+        if (
+            not isinstance(tx_id, str) or tx_id not in expected_ids or tx_id in parsed
+            or not _finite_number(probability) or not 0 <= probability <= 1
+            or not _finite_number(item.get("anomaly_score")) or not 0 <= item["anomaly_score"] <= 1
+            or type(item.get("is_anomaly")) is not bool
+            or not isinstance(reasons, list) or not all(
+                isinstance(reason, dict) and isinstance(reason.get("feature"), str)
+                and isinstance(reason.get("text"), str) and _finite_number(reason.get("impact"))
+                for reason in reasons
+            )
+        ):
+            raise ValueError("Invalid ML prediction.")
+        parsed[tx_id] = item
+    if parsed.keys() != expected_ids:
+        raise ValueError("Incomplete ML predictions.")
+    return version, parsed
+
+
+def _finite_number(value: Any) -> bool:
+    return type(value) in (float, int) and math.isfinite(value)
+
+
 def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
     """
     POST chunks of up to 200 rows to ml-service /predict with 3 retries and exponential backoff (T1.1 step 4).
     Raises on persistent failure so the batch is not committed and will be retried.
     """
     ml_url = os.getenv("ML_SERVICE_URL", "http://ml-service:8000").rstrip("/") + "/predict"
-    token = os.getenv("INTERNAL_ML_TOKEN", "fl_internal_ml_token_2026")
+    token = _required_ml_token()
     headers = {"X-Internal-Token": token}
 
-    model_version = "v1"
+    if not instances:
+        raise ValueError("Prediction requires at least one instance.")
+    model_version = None
     preds_by_tx: Dict[str, Dict[str, Any]] = {}
 
     for start in range(0, len(instances), 200):
@@ -124,10 +183,13 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
             try:
                 res = httpx.post(ml_url, json={"instances": chunk}, headers=headers, timeout=10.0)
                 res.raise_for_status()
-                body = res.json()
-                model_version = body.get("model_version", "v1")
-                for p in body.get("predictions", []):
-                    preds_by_tx[p["transaction_id"]] = p
+                version, predictions = _parse_predictions(
+                    res.json(), {instance["transaction_id"] for instance in chunk}
+                )
+                if model_version is not None and version != model_version:
+                    raise ValueError("ML model changed during a batch.")
+                model_version = version
+                preds_by_tx.update(predictions)
                 last_err = None
                 break
             except Exception as exc:
@@ -135,207 +197,143 @@ def _call_ml_service(instances: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Di
                 if attempt < 3:
                     time.sleep(0.5 * (2 ** (attempt - 1)))
         if last_err is not None:
-            raise RuntimeError(f"ml-service /predict failed after 3 attempts: {last_err}") from last_err
+            raise RuntimeError("ml-service /predict failed after 3 attempts.") from None
 
     return model_version, preds_by_tx
 
 
+def _publish_alert_outbox(conn) -> None:
+    # A broker ack followed by a database failure can result in redelivery.
+    # Consumers deduplicate these deliveries by alert_id.
+    for _ in range(50):
+        try:
+            with conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT alert_id, transaction_id, payload FROM alert_outbox
+                    ORDER BY created_at, alert_id
+                    LIMIT 1 FOR UPDATE SKIP LOCKED
+                    """
+                )
+                item = cur.fetchone()
+                if item is None:
+                    return
+                alert_id, transaction_id, payload = item
+                get_kafka_producer().send("fraud-alerts", key=transaction_id, value=payload).get(timeout=5)
+                cur.execute("DELETE FROM alert_outbox WHERE alert_id = %s", (alert_id,))
+        except Exception as error:
+            print(f"[streaming] Alert publication will retry: {type(error).__name__}")
+            return
+
+
+def _stored_feature_rows(cur, transaction_ids: List[str]) -> pd.DataFrame:
+    # Score the authoritative payload, including after a replay with a changed
+    # message body. Use the same bounded event-time window as inline scoring.
+    cur.execute(
+        """
+        WITH targets AS (
+            SELECT t.* FROM transactions t
+            WHERE t.transaction_id = ANY(%s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM fraud_results f WHERE f.transaction_id = t.transaction_id
+              )
+        )
+        SELECT target.transaction_id AS target_id, target.* FROM targets target
+        UNION ALL
+        SELECT target.transaction_id AS target_id, history.*
+        FROM targets target CROSS JOIN LATERAL (
+            SELECT prior.* FROM transactions prior
+            WHERE prior.account_ref = target.account_ref
+              AND (prior.tx_time, prior.transaction_id COLLATE "C")
+                < (target.tx_time, target.transaction_id COLLATE "C")
+            ORDER BY prior.tx_time DESC, prior.transaction_id COLLATE "C" DESC
+            LIMIT 50
+        ) history
+        """,
+        (transaction_ids,),
+    )
+    rows = pd.DataFrame(cur.fetchall(), columns=("target_id", *TRANSACTION_COLUMNS))
+    if rows.empty:
+        return rows
+
+    # Scope each history window to its target before calling the shared builder.
+    # Keep the real account reference in the row returned to the writer.
+    featured = build_features(rows.assign(account_ref=rows["target_id"]))
+    is_target = rows["transaction_id"] == rows["target_id"]
+    return featured.loc[is_target].assign(account_ref=rows.loc[is_target, "account_ref"])
+
+
 def process_batch(pdf: pd.DataFrame, batch_id: int = 0) -> None:
-    """Process one micro-batch of transactions end-to-end (T1.1 steps 1-8)."""
-    db_url = os.getenv("DATABASE_URL", "postgresql://fraudlens:change_me@postgres:5432/fraudlens")
+    """Process a micro-batch and retry outstanding publication, even when idle."""
+    db_url = validate_runtime_config()
 
-    with psycopg2.connect(db_url) as conn:
-        with conn.cursor() as cur:
-            # Always update heartbeat even on empty batches so dashboard knows streaming is alive
-            cur.execute(
-                """
-                INSERT INTO service_heartbeats (service, last_seen)
-                VALUES ('streaming', now())
-                ON CONFLICT (service) DO UPDATE SET last_seen = EXCLUDED.last_seen
-                """
-            )
-        conn.commit()
+    with closing(psycopg2.connect(db_url, connect_timeout=5)) as conn:
+        with conn, conn.cursor() as cur:
+            upsert_heartbeat(cur)
 
+        # Publish older committed work even if inference fails for this batch.
+        _publish_alert_outbox(conn)
         if pdf is None or pdf.empty:
             return
 
-        # Step 1: Validate rows & publish invalid ones to transactions-dlq
         valid_df, dlq_messages = _validate_rows(pdf)
         if dlq_messages:
             producer = get_kafka_producer()
-            for msg in dlq_messages:
-                producer.send("transactions-dlq", value=msg)
-            producer.flush()
-
+            for message in dlq_messages:
+                producer.send("transactions-dlq", value=message).get(timeout=5)
         if valid_df.empty:
             return
 
-        # Deduplicate transaction_id within the same batch
-        valid_df = valid_df.drop_duplicates(subset=["transaction_id"], keep="first").copy()
-        batch_tx_ids = list(valid_df["transaction_id"].astype(str))
-        accounts = list(valid_df["account_ref"].astype(str).unique())
+        valid_df = valid_df.drop_duplicates(subset=["transaction_id"], keep="first")
+        transaction_ids = list(valid_df["transaction_id"].astype(str))
+        tx_rows = [
+            (
+                str(r["transaction_id"]), str(r["account_ref"]), float(r["amount"]),
+                str(r["tx_time"]), str(r["category"]),
+                None if pd.isna(r.get("merchant")) else str(r.get("merchant")),
+                None if pd.isna(r.get("lat")) else float(r.get("lat")),
+                None if pd.isna(r.get("lon")) else float(r.get("lon")),
+                None if pd.isna(r.get("merch_lat")) else float(r.get("merch_lat")),
+                None if pd.isna(r.get("merch_lon")) else float(r.get("merch_lon")),
+                None if pd.isna(r.get("customer_age")) else int(r.get("customer_age")),
+                str(r["ingested_at"]),
+            )
+            for _, r in valid_df.iterrows()
+        ]
+        with conn, conn.cursor() as cur:
+            insert_transactions_idempotent(cur, tx_rows)
+            batch_featured = _stored_feature_rows(cur, transaction_ids)
+        if batch_featured.empty:
+            return
 
-        with conn.cursor() as cur:
-            # Step 2: INSERT INTO transactions ... ON CONFLICT DO NOTHING
-            tx_rows = [
+        instances = [
+            {
+                "transaction_id": str(row["transaction_id"]),
+                "features": {col: float(row[col]) for col in FEATURE_COLUMNS},
+            }
+            for _, row in batch_featured.iterrows()
+        ]
+        model_version, predictions = _call_ml_service(instances)
+        high, low = load_thresholds()
+        score_rows = []
+        high_risk_items = []
+        for (_, row), instance in zip(batch_featured.iterrows(), instances):
+            tx_id = instance["transaction_id"]
+            prediction = predictions[tx_id]
+            probability = float(prediction["fraud_probability"])
+            anomaly = prediction["is_anomaly"]
+            reasons = prediction["top_reasons"]
+            risk = classify_risk(probability, anomaly, high, low)
+            score_rows.append(
                 (
-                    str(r["transaction_id"]),
-                    str(r["account_ref"]),
-                    float(r["amount"]),
-                    str(r["tx_time"]),
-                    str(r["category"]),
-                    None if pd.isna(r.get("merchant")) else str(r.get("merchant")),
-                    None if pd.isna(r.get("lat")) else float(r.get("lat")),
-                    None if pd.isna(r.get("lon")) else float(r.get("lon")),
-                    None if pd.isna(r.get("merch_lat")) else float(r.get("merch_lat")),
-                    None if pd.isna(r.get("merch_lon")) else float(r.get("merch_lon")),
-                    None if pd.isna(r.get("customer_age")) else int(r.get("customer_age")),
-                    str(r["ingested_at"]),
+                    tx_id, probability, prediction["anomaly_score"], anomaly, risk,
+                    json.dumps(reasons), json.dumps(instance["features"]), model_version,
                 )
-                for _, r in valid_df.iterrows()
-            ]
-            execute_values(
-                cur,
-                """
-                INSERT INTO transactions (
-                  transaction_id, account_ref, amount, tx_time, category, merchant,
-                  lat, lon, merch_lat, merch_lon, customer_age, ingested_at
-                ) VALUES %s
-                ON CONFLICT (transaction_id) DO NOTHING
-                """,
-                tx_rows,
             )
+            if risk == "HIGH_RISK":
+                high_risk_items.append((row, probability, reasons, model_version))
 
-            # Step 3: Fetch latest 50 prior transactions per account in batch (excluding current batch)
-            cur.execute(
-                """
-                SELECT transaction_id, account_ref, amount, tx_time, category, merchant,
-                       lat, lon, merch_lat, merch_lon, customer_age, ingested_at
-                FROM (
-                  SELECT t.*,
-                         ROW_NUMBER() OVER (PARTITION BY account_ref ORDER BY tx_time DESC) AS rn
-                  FROM transactions t
-                  WHERE account_ref = ANY(%s)
-                    AND NOT (transaction_id = ANY(%s))
-                ) ranked
-                WHERE rn <= 50
-                """,
-                (accounts, batch_tx_ids),
-            )
-            history_cols = [
-                "transaction_id", "account_ref", "amount", "tx_time", "category", "merchant",
-                "lat", "lon", "merch_lat", "merch_lon", "customer_age", "ingested_at",
-            ]
-            history_rows = cur.fetchall()
-            history_df = pd.DataFrame(history_rows, columns=history_cols) if history_rows else pd.DataFrame(columns=history_cols)
-
-            combined_df = pd.concat([history_df, valid_df[history_cols]], ignore_index=True)
-            combined_df["tx_time"] = pd.to_datetime(combined_df["tx_time"], utc=True)
-            combined_df = combined_df.sort_values(["tx_time", "transaction_id"]).reset_index(drop=True)
-
-            featured_df = build_features(combined_df)
-            batch_featured = featured_df[featured_df["transaction_id"].isin(set(batch_tx_ids))].copy()
-
-            # Step 4: Call ml-service /predict in chunks of 200
-            instances = []
-            features_by_tx: Dict[str, Dict[str, float]] = {}
-            for _, row in batch_featured.iterrows():
-                tx_id = str(row["transaction_id"])
-                f_dict = {col: float(row[col]) for col in FEATURE_COLUMNS}
-                features_by_tx[tx_id] = f_dict
-                instances.append({"transaction_id": tx_id, "features": f_dict})
-
-            model_version, preds_by_tx = _call_ml_service(instances)
-
-            # Step 5 & 6: Classify with thresholds.json & insert fraud_results
-            high_thresh, low_thresh = load_thresholds()
-            fr_rows = []
-            high_risk_items = []
-
-            for _, row in batch_featured.iterrows():
-                tx_id = str(row["transaction_id"])
-                pred = preds_by_tx[tx_id]
-                prob = float(pred["fraud_probability"])
-                anomaly_score = float(pred.get("anomaly_score", 0.0))
-                is_anomaly = bool(pred.get("is_anomaly", False))
-                top_reasons = pred.get("top_reasons", [])
-                risk_cat = classify_risk(prob, is_anomaly, high_thresh, low_thresh)
-
-                fr_rows.append(
-                    (
-                        tx_id,
-                        prob,
-                        anomaly_score,
-                        is_anomaly,
-                        risk_cat,
-                        json.dumps(top_reasons),
-                        json.dumps(features_by_tx[tx_id]),
-                        model_version,
-                    )
-                )
-                if risk_cat == "HIGH_RISK":
-                    high_risk_items.append((row, prob, top_reasons, model_version))
-
-            execute_values(
-                cur,
-                """
-                INSERT INTO fraud_results (
-                  transaction_id, fraud_probability, anomaly_score, is_anomaly,
-                  risk_category, top_reasons, features, model_version
-                ) VALUES %s
-                ON CONFLICT (transaction_id) DO NOTHING
-                """,
-                fr_rows,
-            )
-
-            # Step 7: Insert HIGH_RISK alerts and publish to fraud-alerts ONLY if newly inserted
-            alerts_to_publish = []
-            for row, prob, top_reasons, m_ver in high_risk_items:
-                tx_id = str(row["transaction_id"])
-                cur.execute(
-                    """
-                    INSERT INTO alerts (transaction_id, risk_score, state)
-                    VALUES (%s, %s, 'NEW')
-                    ON CONFLICT (transaction_id) DO NOTHING
-                    RETURNING alert_id, created_at
-                    """,
-                    (tx_id, prob),
-                )
-                inserted = cur.fetchone()
-                if inserted:
-                    alert_id, created_at = inserted
-                    created_iso = created_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                    alerts_to_publish.append(
-                        (
-                            tx_id,
-                            {
-                                "alert_id": int(alert_id),
-                                "transaction_id": tx_id,
-                                "account_masked": mask_account(str(row["account_ref"])),
-                                "amount": float(row["amount"]),
-                                "category": str(row["category"]),
-                                "risk_score": round(prob, 4),
-                                "risk_category": "HIGH_RISK",
-                                "top_reasons": top_reasons,
-                                "model_version": m_ver,
-                                "created_at": created_iso,
-                            },
-                        )
-                    )
-
-            # Step 8: Upsert service_heartbeats('streaming', now())
-            cur.execute(
-                """
-                INSERT INTO service_heartbeats (service, last_seen)
-                VALUES ('streaming', now())
-                ON CONFLICT (service) DO UPDATE SET last_seen = EXCLUDED.last_seen
-                """
-            )
-
-        conn.commit()
-
-        if alerts_to_publish:
-            producer = get_kafka_producer()
-            for tx_id, payload in alerts_to_publish:
-                producer.send("fraud-alerts", key=tx_id, value=payload)
-            producer.flush()
+        with conn, conn.cursor() as cur:
+            scored_ids = insert_fraud_results_idempotent(cur, score_rows)
+            insert_high_risk_alerts(cur, [item for item in high_risk_items if item[0]["transaction_id"] in scored_ids])
+        _publish_alert_outbox(conn)

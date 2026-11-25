@@ -30,6 +30,13 @@ const SCHEMA_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_tx_account_time ON transactions (account_ref, tx_time)`,
   `CREATE INDEX IF NOT EXISTS idx_tx_time ON transactions (tx_time DESC)`,
+  `CREATE TABLE IF NOT EXISTS inline_scoring_jobs (
+    transaction_id VARCHAR(64) PRIMARY KEY REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    available_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    lease_token    UUID
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_inline_scoring_due ON inline_scoring_jobs (available_at, transaction_id)`,
   `CREATE TABLE IF NOT EXISTS fraud_results (
     transaction_id    VARCHAR(64) PRIMARY KEY REFERENCES transactions(transaction_id),
     fraud_probability REAL NOT NULL,
@@ -55,6 +62,13 @@ const SCHEMA_STATEMENTS = [
     CHECK (state <> 'RESOLVED' OR resolution IS NOT NULL)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_alerts_state ON alerts (state, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS alert_outbox (
+    alert_id       INTEGER PRIMARY KEY REFERENCES alerts(alert_id) ON DELETE CASCADE,
+    transaction_id VARCHAR(64) NOT NULL,
+    payload        JSONB NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_alert_outbox_created ON alert_outbox (created_at, alert_id)`,
   `CREATE TABLE IF NOT EXISTS audit_logs (
     id          BIGSERIAL PRIMARY KEY,
     event_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -69,6 +83,8 @@ const SCHEMA_STATEMENTS = [
     entry_hash  CHAR(64) NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs (event_time DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_alert_raised ON audit_logs (entity_id)
+    WHERE action = 'ALERT_RAISED' AND entity = 'alert'`,
   `CREATE TABLE IF NOT EXISTS model_versions (
     version        VARCHAR(30) PRIMARY KEY,
     algorithm      VARCHAR(60) NOT NULL,

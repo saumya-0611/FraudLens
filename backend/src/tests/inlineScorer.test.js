@@ -1,220 +1,118 @@
-const mockDbState = {
-  transactions: new Map(),
-  results: new Map(),
-  alerts: new Map(),
-  query: jest.fn(),
-  withTransaction: jest.fn(),
-  chain: Promise.resolve(),
-};
+jest.mock('../config/db', () => {
+  const db = jest.requireActual('../config/db');
+  db.pool.connect = jest.fn();
+  return { ...db, query: jest.fn() };
+});
+jest.mock('../config/env', () => ({ mlServiceUrl: 'http://127.0.0.1:1', internalMlToken: 'fixture' }));
+jest.mock('../audit/auditLogger', () => ({ appendAudit: jest.fn() }));
+jest.mock('../websocket/alertSocket', () => ({ broadcastAlert: jest.fn() }));
 
-jest.mock('../config/db', () => ({
-  query: (...args) => mockDbState.query(...args),
-  withTransaction: (...args) => mockDbState.withTransaction(...args),
-}));
-jest.mock('../audit/auditLogger', () => ({ audit: jest.fn().mockResolvedValue(undefined) }));
-jest.mock('../websocket/alertSocket', () => ({
-  broadcastAlert: jest.fn().mockResolvedValue(undefined),
-  sanitizeAlert: value => value,
-}));
-
-const { scoreTransactionInline, persistPendingTransaction, recoverPendingTransactions } = require('../pipeline/inlineScorer');
+const { query, pool } = require('../config/db');
+const { appendAudit } = require('../audit/auditLogger');
 const { broadcastAlert } = require('../websocket/alertSocket');
+const { acceptTransactionInline, scoreTransactionInline } = require('../pipeline/inlineScorer');
 
-const input = {
-  transaction_id: 'fixture-transaction-1',
-  account_ref: 'account-987654',
-  amount: 850,
-  tx_time: '2026-11-24T12:00:00.000Z',
-  category: 'shopping_net',
-  merchant: 'Fixture merchant',
-  lat: 40.7,
-  lon: -74,
-  merch_lat: 40.71,
-  merch_lon: -74.01,
-  customer_age: 35,
-  ingested_at: '2026-11-24T12:00:01.000Z',
+const tx = {
+  transaction_id: 'fixture', account_ref: 'synthetic-1234', amount: '125.50',
+  tx_time: '2026-11-25T02:00:00Z', category: 'shopping_net', ingested_at: '2026-11-25T02:00:00Z',
 };
-
-function prediction(overrides = {}) {
-  return {
-    model_version: 'fixture-v1',
-    predictions: [{
-      transaction_id: input.transaction_id,
-      fraud_probability: 0.91,
-      anomaly_score: 0.72,
-      is_anomaly: true,
-      top_reasons: [{ feature: 'amount_ratio', impact: 0.4, text: 'Fixture explanation' }],
-      ...overrides,
-    }],
-  };
-}
-
-function clientQuery(sql, params = []) {
-  if (sql.includes('FROM transactions') && sql.includes('FOR UPDATE')) {
-    const row = mockDbState.transactions.get(params[0]);
-    return Promise.resolve({ rows: row ? [{ ...row }] : [] });
-  }
-  if (sql.includes('FROM fraud_results')) {
-    const row = mockDbState.results.get(params[0]);
-    return Promise.resolve({ rows: row ? [{ ...row }] : [] });
-  }
-  if (sql.includes('FROM transactions WHERE account_ref')) {
-    const rows = [...mockDbState.transactions.values()]
-      .filter(row => row.account_ref === params[0])
-      .map(({ transaction_id, amount, tx_time }) => ({ transaction_id, amount, tx_time }));
-    return Promise.resolve({ rows });
-  }
-  if (sql.includes('INSERT INTO fraud_results')) {
-    if (mockDbState.results.has(params[0])) return Promise.resolve({ rows: [] });
-    const result = {
-      transaction_id: params[0], fraud_probability: params[1], anomaly_score: params[2],
-      is_anomaly: params[3], risk_category: params[4], top_reasons: JSON.parse(params[5]),
-      features: JSON.parse(params[6]), model_version: params[7],
-    };
-    mockDbState.results.set(params[0], result);
-    return Promise.resolve({ rows: [{ transaction_id: params[0] }] });
-  }
-  if (sql.includes('INSERT INTO alerts')) {
-    if (mockDbState.alerts.has(params[0])) return Promise.resolve({ rows: [] });
-    const alert = { alert_id: mockDbState.alerts.size + 1, created_at: new Date(input.ingested_at) };
-    mockDbState.alerts.set(params[0], alert);
-    return Promise.resolve({ rows: [alert] });
-  }
-  return Promise.resolve({ rows: [] });
-}
+const prediction = {
+  transaction_id: tx.transaction_id, fraud_probability: 0.94, anomaly_score: 0.31, is_anomaly: true,
+  top_reasons: [{ feature: 'amount', text: 'Fixture amount', impact: 0.5 }],
+};
+const payload = { model_version: 'fixture-v2', predictions: [prediction] };
+const client = { query: jest.fn(), release: jest.fn() };
+const acceptedFetch = global.fetch;
 
 beforeEach(() => {
-  mockDbState.transactions.clear();
-  mockDbState.results.clear();
-  mockDbState.alerts.clear();
-  mockDbState.chain = Promise.resolve();
-  mockDbState.query.mockImplementation(async (sql, params = []) => {
-    if (sql.includes('LEFT JOIN fraud_results fr')) {
-      return {
-        rows: [...mockDbState.transactions.values()]
-          .filter(row => !mockDbState.results.has(row.transaction_id))
-          .slice(0, 10),
-      };
-    }
-    if (sql.includes('INSERT INTO transactions')) {
-      if (!mockDbState.transactions.has(params[0])) {
-        mockDbState.transactions.set(params[0], {
-          transaction_id: params[0], account_ref: params[1], amount: params[2],
-          tx_time: params[3], category: params[4], merchant: params[5],
-          lat: params[6], lon: params[7], merch_lat: params[8], merch_lon: params[9],
-          customer_age: params[10], ingested_at: params[11],
-        });
-      }
-    }
+  jest.resetAllMocks();
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  global.fetch = jest.fn();
+  query.mockResolvedValueOnce({ rows: [tx] }).mockResolvedValue({ rows: [] });
+  pool.connect.mockResolvedValue(client);
+  client.query.mockImplementation(async (sql) => {
+    if (sql.includes('INSERT INTO fraud_results')) return { rows: [{ fraud_probability: 0.94, risk_category: 'HIGH_RISK' }] };
+    if (sql.includes('INSERT INTO alerts')) return { rows: [{ alert_id: 3, created_at: new Date(tx.tx_time) }] };
     return { rows: [] };
   });
-  mockDbState.withTransaction.mockImplementation(async work => {
-    const previous = mockDbState.chain;
-    let release;
-    mockDbState.chain = new Promise(resolve => { release = resolve; });
-    await previous;
-    try {
-      return await work({ query: clientQuery });
-    } finally {
-      release();
-    }
-  });
-  global.fetch = jest.fn();
-  jest.clearAllMocks();
 });
 
 afterEach(() => {
-  delete global.fetch;
+  global.fetch = acceptedFetch;
+  jest.restoreAllMocks();
 });
 
-test('persists a durable unscored transaction before inference', async () => {
-  await persistPendingTransaction(input);
-  expect(mockDbState.transactions.get(input.transaction_id)).toMatchObject({
-    transaction_id: input.transaction_id,
-    amount: input.amount,
-    ingested_at: input.ingested_at,
-  });
-  expect(mockDbState.results.size).toBe(0);
-});
-
-test('persists a validated genuine prediction and creates a masked alert atomically', async () => {
-  await persistPendingTransaction(input);
-  global.fetch.mockResolvedValue({ ok: true, json: async () => prediction() });
-
-  const outcome = await scoreTransactionInline(input);
-
-  expect(outcome.scored).toBe(true);
-  expect(mockDbState.results.get(input.transaction_id)).toMatchObject({
-    fraud_probability: 0.91,
-    anomaly_score: 0.72,
-    risk_category: 'HIGH_RISK',
-    model_version: 'fixture-v1',
-  });
-  expect(mockDbState.results.get(input.transaction_id).features).toMatchObject({
-    amount: 850,
-    category_code: 11,
-  });
-  expect(mockDbState.alerts.size).toBe(1);
-  expect(broadcastAlert).toHaveBeenCalledTimes(1);
-  expect(broadcastAlert.mock.calls[0][0].account_masked).toBe('XXXX-7654');
-  expect(JSON.stringify(broadcastAlert.mock.calls[0][0])).not.toContain(input.account_ref);
+test('durable acceptance inserts once using the established transaction key', async () => {
+  await acceptTransactionInline(tx);
+  expect(query).toHaveBeenCalledWith(expect.stringMatching(/INSERT INTO transactions[\s\S]+ON CONFLICT \(transaction_id\) DO NOTHING/),
+    expect.arrayContaining([tx.transaction_id, tx.account_ref, tx.ingested_at]));
+  expect(query.mock.calls[0][0]).toContain('INSERT INTO inline_scoring_jobs');
+  expect(global.fetch).not.toHaveBeenCalled();
 });
 
 test.each([
-  ['transport outage', () => Promise.reject(new Error('fixture outage'))],
-  ['malformed prediction', () => Promise.resolve({ ok: true, json: async () => ({ model_version: 'fixture-v1', predictions: [] }) })],
-  ['mismatched transaction id', () => Promise.resolve({ ok: true, json: async () => prediction({ transaction_id: 'other-id' }) })],
-  ['out of range probability', () => Promise.resolve({ ok: true, json: async () => prediction({ fraud_probability: 1.7 }) })],
-  ['non-success response', () => Promise.resolve({ ok: false, status: 503 })],
-])('leaves the durable row pending without invented scores after %s', async (_name, response) => {
-  await persistPendingTransaction(input);
-  global.fetch.mockImplementation(response);
-
-  const outcome = await scoreTransactionInline(input);
-
-  expect(outcome).toEqual({ pending: true });
-  expect(mockDbState.transactions.has(input.transaction_id)).toBe(true);
-  expect(mockDbState.results.size).toBe(0);
-  expect(mockDbState.alerts.size).toBe(0);
+  ['network unavailable', () => Promise.reject(new Error('ECONNREFUSED'))],
+  ['timed out', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+  ['HTTP error', async () => ({ ok: false, status: 503 })],
+  ['malformed JSON', async () => ({ ok: true, json: async () => { throw new SyntaxError(); } })],
+  ['missing version', async () => Response.json({ predictions: [prediction] })],
+  ['empty predictions', async () => Response.json({ ...payload, predictions: [] })],
+  ['wrong transaction', async () => Response.json({ ...payload, predictions: [{ ...prediction, transaction_id: 'other' }] })],
+  ['coerced probability', async () => Response.json({ ...payload, predictions: [{ ...prediction, fraud_probability: '0.9' }] })],
+  ['out-of-range probability', async () => Response.json({ ...payload, predictions: [{ ...prediction, fraud_probability: 2 }] })],
+  ['missing anomaly score', async () => Response.json({ ...payload, predictions: [{ ...prediction, anomaly_score: null }] })],
+  ['out-of-range anomaly score', async () => Response.json({ ...payload, predictions: [{ ...prediction, anomaly_score: 2 }] })],
+  ['coerced anomaly flag', async () => Response.json({ ...payload, predictions: [{ ...prediction, is_anomaly: 'false' }] })],
+  ['invalid reasons', async () => Response.json({ ...payload, predictions: [{ ...prediction, top_reasons: ['fake'] }] })],
+])('%s leaves the accepted transaction pending and emits no score or alert', async (_name, response) => {
+  global.fetch.mockImplementationOnce(response);
+  await expect(scoreTransactionInline(tx.transaction_id)).resolves.toBe(false);
+  expect(pool.connect).not.toHaveBeenCalled();
+  expect(appendAudit).not.toHaveBeenCalled();
   expect(broadcastAlert).not.toHaveBeenCalled();
 });
 
-test('retries a pending ID after a transient outage and stores the real response', async () => {
-  await persistPendingTransaction(input);
-  global.fetch
-    .mockRejectedValueOnce(new Error('temporary outage'))
-    .mockResolvedValueOnce({ ok: true, json: async () => prediction({ fraud_probability: 0.22, is_anomaly: false }) });
-
-  expect(await scoreTransactionInline(input)).toEqual({ pending: true });
-  expect(await scoreTransactionInline(input)).toEqual({ scored: true, alert: null });
-  expect(mockDbState.results.get(input.transaction_id).fraud_probability).toBe(0.22);
-  expect(mockDbState.results.get(input.transaction_id).risk_category).toBe('LEGITIMATE');
-  expect(mockDbState.alerts.size).toBe(0);
-});
-
-test('startup recovery revisits durable pending rows and stores a later valid result', async () => {
-  await persistPendingTransaction(input);
-  global.fetch.mockResolvedValue({ ok: true, json: async () => prediction({ fraud_probability: 0.62, is_anomaly: false }) });
-
-  await recoverPendingTransactions();
-
-  expect(mockDbState.results.get(input.transaction_id)).toMatchObject({
-    fraud_probability: 0.62,
-    risk_category: 'SUSPICIOUS',
-  });
-});
-
-test('concurrent duplicate scoring keeps the first committed decision and emits one alert', async () => {
-  await persistPendingTransaction(input);
-  global.fetch.mockResolvedValue({ ok: true, json: async () => prediction() });
-
-  await Promise.all([
-    scoreTransactionInline(input),
-    scoreTransactionInline({ ...input, amount: 1, category: 'food_dining' }),
+test('persists exact validated output using canonical 13 features and commits before broadcast', async () => {
+  global.fetch.mockResolvedValueOnce(Response.json(payload));
+  await scoreTransactionInline(tx.transaction_id);
+  const [url, config] = global.fetch.mock.calls[0];
+  expect(url).toBe('http://127.0.0.1:1/predict');
+  const { instances: [instance] } = JSON.parse(config.body);
+  expect(instance.transaction_id).toBe(tx.transaction_id);
+  expect(instance.features.amount).toBe(125.5);
+  expect(Object.keys(instance.features)).toHaveLength(13);
+  expect(query.mock.calls[1][0]).toMatch(/COLLATE "C"[\s\S]+LIMIT 50/);
+  expect(pool.connect.mock.invocationCallOrder[0]).toBeGreaterThan(global.fetch.mock.invocationCallOrder[0]);
+  expect(client.query.mock.calls[1][1]).toEqual([
+    tx.transaction_id, 0.94, 0.31, true, 'HIGH_RISK', JSON.stringify(prediction.top_reasons),
+    JSON.stringify(instance.features), 'fixture-v2',
   ]);
+  expect(client.query).toHaveBeenLastCalledWith('COMMIT');
+  expect(appendAudit).toHaveBeenCalledWith(client, expect.objectContaining({ action: 'ALERT_RAISED' }));
+  expect(broadcastAlert).toHaveBeenCalledWith(expect.objectContaining({ account_masked: 'XXXX-1234', alert_id: 3 }));
+  expect(client.query.mock.invocationCallOrder.at(-1)).toBeLessThan(broadcastAlert.mock.invocationCallOrder[0]);
+});
 
-  expect(global.fetch).toHaveBeenCalledTimes(1);
-  expect(mockDbState.results.get(input.transaction_id).fraud_probability).toBe(0.91);
-  expect(mockDbState.alerts.size).toBe(1);
-  expect(broadcastAlert).toHaveBeenCalledTimes(1);
+test('a concurrent loser cannot insert an alert, append audit, or broadcast', async () => {
+  client.query.mockResolvedValue({ rows: [] });
+  global.fetch.mockResolvedValueOnce(Response.json(payload));
+  await scoreTransactionInline(tx.transaction_id);
+  expect(client.query.mock.calls.map(([sql]) => sql)).toEqual(['BEGIN', expect.stringContaining('INSERT INTO fraud_results'), 'COMMIT']);
+  expect(appendAudit).not.toHaveBeenCalled();
+  expect(broadcastAlert).not.toHaveBeenCalled();
+});
+
+test('an already scored transaction does not make another inference call', async () => {
+  query.mockReset().mockResolvedValueOnce({ rows: [{ ...tx, scored: true }] });
+  await scoreTransactionInline(tx.transaction_id);
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test('a failed alert audit rolls back the score and alert together without publishing', async () => {
+  global.fetch.mockResolvedValueOnce(Response.json(payload));
+  appendAudit.mockRejectedValueOnce(new Error('fixture audit failure'));
+  await expect(scoreTransactionInline(tx.transaction_id)).rejects.toThrow('fixture audit failure');
+  expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+  expect(client.release).toHaveBeenCalledTimes(1);
+  expect(broadcastAlert).not.toHaveBeenCalled();
 });

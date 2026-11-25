@@ -9,29 +9,12 @@
  */
 const env = require('../config/env');
 const { query, withTransaction } = require('../config/db');
-const { audit } = require('../audit/auditLogger');
-const { broadcastAlert, sanitizeAlert } = require('../websocket/alertSocket');
+const { appendAudit } = require('../audit/auditLogger');
+const { broadcastAlert } = require('../websocket/alertSocket');
 const { maskAccount } = require('../utils/mask');
 
-const CATEGORY_MAP = {
-  entertainment: 0,
-  food_dining: 1,
-  gas_transport: 2,
-  grocery_net: 3,
-  grocery_pos: 4,
-  health_fitness: 5,
-  home: 6,
-  kids_pets: 7,
-  misc_net: 8,
-  misc_pos: 9,
-  personal_care: 10,
-  shopping_net: 11,
-  shopping_pos: 12,
-  travel: 13,
-};
-
-const HIGH_THRESHOLD = 0.80;
-const LOW_THRESHOLD = 0.40;
+const CATEGORY_MAP = require('../../../shared/category_map.json');
+const { high: HIGH_THRESHOLD, low: LOW_THRESHOLD } = require('../../../shared/thresholds.json');
 const NO_PREVIOUS_TX_SECS = 604800;
 const AVG_WINDOW = 30;
 const EARTH_RADIUS_KM = 6371.0088;
@@ -72,11 +55,10 @@ function computeFeatures(tx, historyRows) {
   const distanceKm = haversineKm(tx.lat, tx.lon, tx.merch_lat, tx.merch_lon);
   const customerAge = tx.customer_age === null || tx.customer_age === undefined ? -1 : Number(tx.customer_age);
 
-  const prior = (historyRows || [])
-    .filter((r) => String(r.transaction_id) !== String(tx.transaction_id))
-    .map((r) => ({ ms: new Date(r.tx_time).getTime(), amount: Number(r.amount || 0) }))
-    .filter((r) => Number.isFinite(r.ms) && r.ms <= txMs)
-    .sort((a, b) => a.ms - b.ms);
+  const prior = historyRows.slice().reverse().map((row) => ({
+    ms: new Date(row.tx_time).getTime(),
+    amount: Number(row.amount),
+  }));
 
   const oneHourAgo = txMs - 3600 * 1000;
   const oneDayAgo = txMs - 24 * 3600 * 1000;
@@ -99,19 +81,19 @@ function computeFeatures(tx, historyRows) {
   const amountRatio = amount / Math.max(avgAmountPrior, 1.0);
 
   return {
-    amount: Number(amount.toFixed(2)),
-    log_amount: Number(Math.log1p(Math.max(0, amount)).toFixed(6)),
+    amount,
+    log_amount: Math.log1p(amount),
     hour,
     day_of_week: dayOfWeek,
     is_night: isNight,
     category_code: categoryCode,
-    distance_km: Number(distanceKm.toFixed(4)),
+    distance_km: distanceKm,
     customer_age: customerAge,
     tx_count_1h: txCount1h,
     tx_count_24h: txCount24h,
-    secs_since_last_tx: Number(secsSinceLastTx.toFixed(2)),
-    avg_amount_prior: Number(avgAmountPrior.toFixed(2)),
-    amount_ratio: Number(amountRatio.toFixed(4)),
+    secs_since_last_tx: secsSinceLastTx,
+    avg_amount_prior: avgAmountPrior,
+    amount_ratio: amountRatio,
   };
 }
 
@@ -128,36 +110,11 @@ async function touchStreamingHeartbeat() {
 }
 
 let heartbeatTimer = null;
-let recoveryRunning = false;
-
-async function recoverPendingTransactions() {
-  if (recoveryRunning) return;
-  recoveryRunning = true;
-  try {
-    const pending = await query(
-      `SELECT t.${TRANSACTION_COLUMNS.split(',').join(', t.')}
-       FROM transactions t
-       LEFT JOIN fraud_results fr ON fr.transaction_id = t.transaction_id
-       WHERE fr.transaction_id IS NULL
-       ORDER BY t.ingested_at ASC
-       LIMIT 10`
-    );
-    await Promise.allSettled((pending.rows || []).map((transaction) => scoreTransactionInline(transaction)));
-  } catch (error) {
-    console.warn('[InlineScorer] Pending recovery warning:', error.message);
-  } finally {
-    recoveryRunning = false;
-  }
-}
 
 function startInlineHeartbeat() {
   if (heartbeatTimer) return;
   touchStreamingHeartbeat();
-  void recoverPendingTransactions();
-  heartbeatTimer = setInterval(() => {
-    touchStreamingHeartbeat();
-    void recoverPendingTransactions();
-  }, 25000);
+  heartbeatTimer = setInterval(touchStreamingHeartbeat, 25000);
   if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
 }
 
@@ -168,176 +125,150 @@ function stopInlineHeartbeat() {
   }
 }
 
-const TRANSACTION_COLUMNS = `transaction_id, account_ref, amount, tx_time, category, merchant,
-  lat, lon, merch_lat, merch_lon, customer_age, ingested_at`;
-
-async function persistPendingTransaction(tx) {
+async function acceptTransactionInline(tx) {
   await query(
-    `INSERT INTO transactions (${TRANSACTION_COLUMNS})
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    `WITH intake AS (
+       INSERT INTO transactions (
+         transaction_id, account_ref, amount, tx_time, category, merchant,
+         lat, lon, merch_lat, merch_lon, customer_age, ingested_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (transaction_id) DO NOTHING
+     )
+     INSERT INTO inline_scoring_jobs (transaction_id)
+     SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM fraud_results WHERE transaction_id = $1)
      ON CONFLICT (transaction_id) DO NOTHING`,
     [
-      String(tx.transaction_id), String(tx.account_ref), Number(tx.amount), tx.tx_time,
-      String(tx.category), tx.merchant || null, tx.lat ?? null, tx.lon ?? null,
-      tx.merch_lat ?? null, tx.merch_lon ?? null, tx.customer_age ?? null,
-      tx.ingested_at || new Date().toISOString(),
+      tx.transaction_id, tx.account_ref, tx.amount, tx.tx_time, tx.category, tx.merchant || null,
+      tx.lat ?? null, tx.lon ?? null, tx.merch_lat ?? null, tx.merch_lon ?? null,
+      tx.customer_age ?? null, tx.ingested_at,
     ]
   );
 }
 
-function parsePrediction(payload, transactionId) {
-  if (!payload || typeof payload.model_version !== 'string' || !payload.model_version.trim() ||
-      payload.model_version.length > 30 || !Array.isArray(payload.predictions) ||
-      payload.predictions.length !== 1) return null;
-  const prediction = payload.predictions[0];
-  if (!prediction || prediction.transaction_id !== transactionId ||
-      typeof prediction.is_anomaly !== 'boolean' ||
-      !Number.isFinite(prediction.fraud_probability) ||
-      prediction.fraud_probability < 0 || prediction.fraud_probability > 1 ||
-      !Number.isFinite(prediction.anomaly_score) ||
-      prediction.anomaly_score < 0 || prediction.anomaly_score > 1 ||
-      !Array.isArray(prediction.top_reasons) ||
-      prediction.top_reasons.some((reason) => !reason ||
-        typeof reason.feature !== 'string' || typeof reason.text !== 'string' ||
-        !Number.isFinite(reason.impact))) return null;
-  return { ...prediction, model_version: payload.model_version };
-}
-
-async function requestPrediction(tx, client) {
-  const histRes = await client.query(
-    `SELECT transaction_id, amount, tx_time
-     FROM transactions WHERE account_ref = $1
-     ORDER BY tx_time DESC LIMIT 50`,
-    [String(tx.account_ref)]
-  );
-  const features = computeFeatures(tx, histRes.rows || []);
-  const mlBase = (env.mlServiceUrl || 'http://localhost:8000').replace(/\/+$/, '');
+async function predict(transactionId, features) {
+  const mlBase = env.mlServiceUrl.replace(/\/+$/, '');
   const headers = { 'Content-Type': 'application/json' };
   if (env.internalMlToken) headers['X-Internal-Token'] = env.internalMlToken;
+  const response = await fetch(`${mlBase}/predict`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ instances: [{ transaction_id: transactionId, features }] }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('ML returned an unsuccessful response.');
 
-  try {
-    const response = await fetch(`${mlBase}/predict`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ instances: [{ transaction_id: String(tx.transaction_id), features }] }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout
-        ? AbortSignal.timeout(15000)
-        : undefined,
-    });
-    if (!response.ok) {
-      console.error(`[InlineScorer] ML /predict returned HTTP ${response.status}`);
-      return null;
-    }
-    const prediction = parsePrediction(await response.json(), String(tx.transaction_id));
-    return prediction ? { prediction, features } : null;
-  } catch (error) {
-    console.error('[InlineScorer] ML /predict failed:', error.message);
-    return null;
+  const payload = await response.json();
+  const modelVersion = payload?.model_version;
+  const predictions = payload?.predictions;
+  const result = Array.isArray(predictions) && predictions.length === 1 ? predictions[0] : undefined;
+  if (typeof modelVersion !== 'string' || !modelVersion.trim() || modelVersion.length > 30 ||
+      result?.transaction_id !== transactionId ||
+      !Number.isFinite(result.fraud_probability) || result.fraud_probability < 0 || result.fraud_probability > 1 ||
+      !Number.isFinite(result.anomaly_score) || result.anomaly_score < 0 || result.anomaly_score > 1 ||
+      typeof result.is_anomaly !== 'boolean' ||
+      !Array.isArray(result.top_reasons) || !result.top_reasons.every((reason) =>
+        reason && typeof reason.feature === 'string' && typeof reason.text === 'string' && Number.isFinite(reason.impact))) {
+    throw new Error('ML returned an invalid prediction.');
   }
+  return { ...result, model_version: modelVersion };
 }
 
-async function scoreTransactionInline(tx) {
-  const transactionId = String(tx.transaction_id);
-  const outcome = await withTransaction(async (client) => {
-    const stored = await client.query(
-      `SELECT ${TRANSACTION_COLUMNS} FROM transactions
-       WHERE transaction_id = $1 FOR UPDATE`,
-      [transactionId]
-    );
-    const transaction = stored.rows?.[0];
-    if (!transaction) throw new Error(`Pending transaction ${transactionId} was not persisted`);
-
-    const priorResult = await client.query(
-      `SELECT fraud_probability, anomaly_score, is_anomaly, risk_category,
-              top_reasons, features, model_version, scored_at
-       FROM fraud_results WHERE transaction_id = $1`,
-      [transactionId]
-    );
-    if (priorResult.rows?.[0]) return { alreadyScored: true };
-
-    const predictionResult = await requestPrediction(transaction, client);
-    if (!predictionResult) return { pending: true };
-    const { prediction, features } = predictionResult;
-
-    const riskCategory = classifyRisk(prediction.fraud_probability, prediction.is_anomaly);
-    const inserted = await client.query(
+async function persistScore(tx, features, prediction) {
+  const { fraud_probability, anomaly_score, is_anomaly, top_reasons, model_version } = prediction;
+  const category = classifyRisk(fraud_probability, is_anomaly);
+  return withTransaction(async (client) => {
+    const { rows: [score] } = await client.query(
       `INSERT INTO fraud_results (
-         transaction_id, fraud_probability, anomaly_score, is_anomaly,
-         risk_category, top_reasons, features, model_version, scored_at
-       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,NOW())
+         transaction_id, fraud_probability, anomaly_score, is_anomaly, risk_category,
+         top_reasons, features, model_version
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)
        ON CONFLICT (transaction_id) DO NOTHING
-       RETURNING transaction_id`,
-      [transactionId, prediction.fraud_probability, prediction.anomaly_score,
-        prediction.is_anomaly, riskCategory, JSON.stringify(prediction.top_reasons),
-        JSON.stringify(features), prediction.model_version]
+       RETURNING fraud_probability, risk_category`,
+      [tx.transaction_id, fraud_probability, anomaly_score, is_anomaly, category,
+        JSON.stringify(top_reasons), JSON.stringify(features), model_version]
     );
-    if (!inserted.rows?.[0]) return { alreadyScored: true };
 
-    let alert = null;
-    if (riskCategory === 'HIGH_RISK') {
-      const alertRes = await client.query(
+    let alert;
+    if (score?.risk_category === 'HIGH_RISK') {
+      const { rows: [created] } = await client.query(
         `INSERT INTO alerts (transaction_id, risk_score, state)
          VALUES ($1, $2, 'NEW')
          ON CONFLICT (transaction_id) DO NOTHING
          RETURNING alert_id, created_at`,
-        [transactionId, prediction.fraud_probability]
+        [tx.transaction_id, score.fraud_probability]
       );
-      const created = alertRes.rows?.[0];
       if (created) {
-        alert = sanitizeAlert({
+        alert = {
           alert_id: created.alert_id,
-          transaction_id: transactionId,
-          account_masked: maskAccount(String(transaction.account_ref)),
-          amount: Number(transaction.amount),
-          category: String(transaction.category),
-          risk_score: prediction.fraud_probability,
-          risk_category: riskCategory,
-          top_reasons: prediction.top_reasons,
-          model_version: prediction.model_version,
-          created_at: created.created_at instanceof Date
-            ? created.created_at.toISOString()
-            : new Date(created.created_at).toISOString(),
+          transaction_id: tx.transaction_id,
+          account_masked: maskAccount(tx.account_ref),
+          amount: Number(tx.amount),
+          category: tx.category,
+          risk_score: score.fraud_probability,
+          risk_category: score.risk_category,
+          top_reasons,
+          model_version,
+          created_at: created.created_at.toISOString(),
+        };
+        await appendAudit(client, {
+          action: 'ALERT_RAISED', entity: 'alert', entityId: String(alert.alert_id),
+          details: {
+            transaction_id: alert.transaction_id, risk_score: alert.risk_score,
+            risk_category: alert.risk_category, amount: alert.amount, category: alert.category,
+          },
         });
       }
     }
-    return { scored: true, alert };
-  });
 
-  if (outcome?.alert) {
-    try {
-      await audit({
-        userId: null,
-        username: 'system',
-        action: 'ALERT_RAISED',
-        entity: 'alert',
-        entityId: String(outcome.alert.alert_id),
-        details: {
-          transaction_id: outcome.alert.transaction_id,
-          risk_score: outcome.alert.risk_score,
-          risk_category: outcome.alert.risk_category,
-          amount: outcome.alert.amount,
-          category: outcome.alert.category,
-        },
-      });
-    } catch (error) {
-      console.error('[InlineScorer] Audit log failed:', error.message);
-    }
-    try {
-      await broadcastAlert(outcome.alert);
-    } catch (error) {
-      console.error('[InlineScorer] WebSocket broadcast warning:', error.message);
-    }
+    return alert;
+  });
+}
+
+async function scoreTransactionInline(transactionId) {
+  const { rows: [tx] } = await query(
+    `SELECT t.*, EXISTS (SELECT 1 FROM fraud_results WHERE transaction_id = t.transaction_id) AS scored
+     FROM transactions t WHERE t.transaction_id = $1`,
+    [transactionId]
+  );
+  if (!tx || tx.scored) return true;
+
+  // Replays always use the first accepted payload stored under this transaction ID.
+  const { rows: history } = await query(
+    `SELECT prior.transaction_id, prior.amount, prior.tx_time
+     FROM transactions AS target
+     JOIN transactions AS prior ON prior.account_ref = target.account_ref
+     WHERE target.transaction_id = $1
+       AND (prior.tx_time, prior.transaction_id COLLATE "C")
+         < (target.tx_time, target.transaction_id COLLATE "C")
+     ORDER BY prior.tx_time DESC, prior.transaction_id COLLATE "C" DESC
+     LIMIT 50`,
+    [transactionId]
+  );
+  const features = computeFeatures(tx, history);
+
+  let prediction;
+  try {
+    prediction = await predict(transactionId, features);
+  } catch {
+    console.warn('[InlineScorer] Inference did not complete. Transaction remains unscored unless another attempt commits.');
+    return false;
   }
 
-  if (outcome?.scored) await touchStreamingHeartbeat();
-  return outcome;
+  const alert = await persistScore(tx, features, prediction);
+  if (alert) {
+    try {
+      await broadcastAlert(alert);
+    } catch (error) {
+      console.warn('[InlineScorer] WebSocket broadcast warning:', error.message);
+    }
+  }
+  await touchStreamingHeartbeat();
+  return true;
 }
 
 module.exports = {
+  acceptTransactionInline,
   scoreTransactionInline,
-  persistPendingTransaction,
-  parsePrediction,
-  recoverPendingTransactions,
   computeFeatures,
   classifyRisk,
   startInlineHeartbeat,

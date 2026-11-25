@@ -1,8 +1,13 @@
 # FraudLens Streaming Pipeline (`streaming`)
 
-Consumes transactions from Kafka topic `transactions-raw`, computes the 13 features using `shared/fraud_features.py` with a 50-row per-account lookback from PostgreSQL, calls `ml-service /predict`, classifies risk using `shared/thresholds.json`, persists idempotently (`ON CONFLICT DO NOTHING`) to `transactions`, `fraud_results`, and `alerts`, and publishes new high-risk alerts to `fraud-alerts`.
+Consumes `transactions-raw`, stores the first payload for each transaction ID, and scores it against up to 50 earlier records for that account. It calls `ml-service /predict` with the shared 13 features and classifies validated predictions using `shared/thresholds.json`.
+
+For high-risk transactions, the score, alert, and pending notification commit together. The worker retries publication from `alert_outbox` while processing or idle. It removes a row after Kafka acknowledges it. A failure after the broker acknowledgment can cause redelivery, so the backend deduplicates its audit entry by alert ID.
 
 ## How to Run (Docker)
+
+Set `DATABASE_URL` and the same `INTERNAL_ML_TOKEN` used by FastAPI in the worker environment.
+
 ```bash
 docker compose up --build -d streaming
 ```
