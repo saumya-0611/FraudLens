@@ -1,7 +1,7 @@
 """
 security.py - Internal service authentication for ml-service (CONTRACTS section 6, T0.4 & T2.4).
 
-Every endpoint except /health requires the header:
+Inference and model management require the header:
     X-Internal-Token: <INTERNAL_ML_TOKEN>
 Uses hmac.compare_digest for constant-time comparison to prevent timing attacks.
 """

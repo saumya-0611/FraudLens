@@ -64,6 +64,11 @@ class HybridPredictor:
         self._meta: Dict[str, Any] = {}
         self._reference_stats: Dict[str, Any] = {}
 
+    @property
+    def is_loaded(self) -> bool:
+        """Report whether model initialization published a verified artifact."""
+        return bool(self.sha256) and (self._booster is not None or self._sklearn_clf is not None)
+
     def ensure_loaded(self) -> None:
         """Load the ACTIVE model from model_store (or bootstrap v1 if none exists yet)."""
         with self._lock:

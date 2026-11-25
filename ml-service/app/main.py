@@ -2,34 +2,56 @@
 main.py - FraudLens ML Service (FastAPI, internal port 8000).
 
 Implements CONTRACTS.md Section 6 (Phase 2 & Phase 3 real ML lifecycle):
-- GET & HEAD /health                (public, returns status and active model_version)
+- GET & HEAD /health                (public liveness)
+- GET & HEAD /ready                 (inference readiness)
 - POST /predict                     (XGBoost + Isolation Forest + top_reasons from pred_contribs)
 - GET /models                       (list model_versions + active_version + latest drift report)
 - POST /drift/check                 (PSI on last N scored rows vs reference_stats.json)
 - POST /retrain                     (train candidate, validate PR-AUC >= 0.95 * active PR-AUC)
 - POST /models/{version}/activate   (SHA-256 verified hot-reload without restarting FastAPI)
 """
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.drift.checker import get_latest_drift_report, run_drift_check
 from app.predictor import predictor
 from app.registry.model_registry import list_model_versions, set_active_version
 from app.retrain.service import retrain_candidate
-from app.security import verify_internal_token
+from app.security import get_internal_token, verify_internal_token
+
+
+async def _load_model() -> bool:
+    try:
+        await asyncio.to_thread(predictor.ensure_loaded)
+    except Exception:
+        print("[ml-service] Model initialization failed.")
+        return False
+    return True
+
+
+async def _retry_model_load() -> None:
+    while not predictor.is_loaded:
+        await asyncio.sleep(10)
+        if await _load_model():
+            return
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Ensure active model v1 is trained/loaded and SHA-256 verified on startup
+    loaded = await _load_model()
+    retry = None if loaded else asyncio.create_task(_retry_model_load())
     try:
-        predictor.ensure_loaded()
-    except Exception as exc:
-        print(f"[ml-service] Warning during startup model pre-load: {exc}")
-    yield
+        yield
+    finally:
+        if retry:
+            retry.cancel()
+            with suppress(asyncio.CancelledError):
+                await retry
 
 
 app = FastAPI(
@@ -84,6 +106,26 @@ class PredictResponse(BaseModel):
 def health() -> Dict[str, str]:
     """Public lightweight health check (supports GET and HEAD for Docker/Uptime checks)."""
     return {"status": "ok", "model_version": predictor.version}
+
+
+@app.api_route("/ready", methods=["GET", "HEAD"])
+async def ready(x_internal_token: str | None = Header(default=None)) -> JSONResponse:
+    """Require a loaded model for probes and verify the credential sent by the backend."""
+    if x_internal_token is not None:
+        verify_internal_token(x_internal_token)
+    configured = get_internal_token()
+    token_ready = (
+        bool(configured)
+        and configured == configured.strip()
+        and all(32 <= ord(char) <= 126 for char in configured)
+        and not configured.lower().startswith(("change_me", "replace_with"))
+    )
+    available = predictor.is_loaded and token_ready
+    return JSONResponse(
+        {"status": "ok" if available else "unavailable"},
+        status_code=200 if available else 503,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/predict", response_model=PredictResponse, dependencies=[Depends(verify_internal_token)])
