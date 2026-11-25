@@ -2,7 +2,7 @@
 
 Deploy the entire 6-service FraudLens stack (`PostgreSQL 16`, `Apache Kafka KRaft`, `PySpark Streaming`, `FastAPI XGBoost + Isolation Forest`, `Node.js/Express API + WebSockets`, and `React SPA`) onto a single Linux VM behind **Caddy** with automatic Let's Encrypt HTTPS.
 
-Because Caddy serves the compiled frontend and proxies `/api/*`, `/ws/*`, `/health`, and `/api-docs*` on **one single HTTPS origin**, `httpOnly` JWT cookies, same-origin CSRF checks, live WebSocket alert toasts (`wss://`), and optional OIDC social sign-in all work out of the box with zero CORS workarounds.
+Because Caddy serves the compiled frontend and proxies `/api/*`, `/ws/*`, `/health`, `/ready`, and `/api-docs*` on **one single HTTPS origin**, `httpOnly` JWT cookies, same-origin CSRF checks, live WebSocket alert toasts (`wss://`), and optional OIDC social sign-in all work out of the box with zero CORS workarounds.
 
 ---
 
@@ -84,7 +84,15 @@ docker compose -f docker-compose.prod.yml logs -f edge backend ml-service
 Within ~30–60 seconds:
 - Caddy obtains a Let's Encrypt certificate automatically.
 - `ml-service` bootstraps and SHA-256-verifies `v1` (XGBoost + Isolation Forest).
-- `backend` connects to PostgreSQL + Kafka and seeds initial `admin`, `analyst`, and `viewer` accounts.
+- `backend` applies the schema, connects to PostgreSQL and Kafka, and becomes ready after verifying the ML connection.
+
+Provision initial accounts explicitly once the backend is ready:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec backend npm run seed
+```
+
+The seed command creates only missing accounts.
 
 ---
 
@@ -92,7 +100,7 @@ Within ~30–60 seconds:
 
 1. **Public Health Check:**
    ```bash
-   curl -fsS https://<SITE_ADDRESS>/health
+   curl -fsS https://<SITE_ADDRESS>/ready
    # Expected: {"status":"ok"}
    ```
 2. **Open in any browser worldwide:**

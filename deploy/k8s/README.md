@@ -9,7 +9,7 @@ Run from the repository root in a Bash-compatible shell. The local images use th
 ```bash
 minikube start -p fraudlens-demo --driver=docker --cni=calico --keep-context
 docker build -t fraudlens-postgres:phase2 database
-docker build -t fraudlens-backend:phase2 backend
+docker build -f backend/Dockerfile -t fraudlens-backend:phase2 .
 docker build -t fraudlens-frontend:phase2 frontend
 docker build -f ml-service/Dockerfile -t fraudlens-ml-service:phase2 .
 docker build -f streaming/Dockerfile -t fraudlens-streaming:phase2 .

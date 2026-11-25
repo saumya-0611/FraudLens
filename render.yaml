@@ -25,7 +25,7 @@ services:
     dockerfilePath: ./ml-service/Dockerfile
     dockerContext: .
     plan: free
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -38,9 +38,9 @@ services:
     name: fraudlens-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    dockerContext: .
     plan: free
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: NODE_ENV
         value: production
@@ -55,8 +55,6 @@ services:
           property: host
       - key: PIPELINE_MODE
         value: inline
-      - key: AUTO_SEED_SAMPLE
-        value: "true"
       - key: COOKIE_SECURE
         value: "true"
       - key: JWT_SECRET
@@ -68,12 +66,6 @@ services:
       - key: INTERNAL_ML_TOKEN
         sync: false
       - key: WS_ALLOWED_ORIGINS
-        sync: false
-      - key: SEED_ADMIN_PASSWORD
-        sync: false
-      - key: SEED_ANALYST_PASSWORD
-        sync: false
-      - key: SEED_VIEWER_PASSWORD
         sync: false
       - key: SOCIAL_OAUTH_ENABLED
         value: "false"

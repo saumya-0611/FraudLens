@@ -13,10 +13,10 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${FRAUDLENS_ENV_FILE:-.env}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fraudlens}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the selected environment file}
       POSTGRES_DB: ${POSTGRES_DB:-fraudlens}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -61,6 +61,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        set -eu
         echo "Creating FraudLens Kafka topics..."
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions-raw --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions-dlq --partitions 1 --replication-factor 1
@@ -76,7 +77,7 @@ services:
       dockerfile: ml-service/Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${FRAUDLENS_ENV_FILE:-.env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,7 +85,7 @@ services:
       - model_store:/app/model_store
       - ./data-science/datasets:/app/data-science/datasets:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -94,22 +95,22 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${FRAUDLENS_ENV_FILE:-.env}
     ports:
       - "${BACKEND_HOST_PORT:-5000}:5000"
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ml-service:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/ready > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -123,12 +124,14 @@ services:
       dockerfile: streaming/Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${FRAUDLENS_ENV_FILE:-.env}
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ml-service:
         condition: service_healthy
     volumes:
@@ -142,7 +145,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${FRAUDLENS_ENV_FILE:-.env}
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:5173"
     depends_on:

@@ -2,6 +2,7 @@
 .env
 .env.prod
 .env.local
+.env.ci
 *.pem
 # node
 node_modules/

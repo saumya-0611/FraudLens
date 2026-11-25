@@ -14,6 +14,12 @@ const transactionsRoutes = require('./routes/transactions.routes');
 const alertsRoutes = require('./routes/alerts.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const modelsRoutes = require('./routes/models.routes');
+const env = require('./config/env');
+const { query } = require('./config/db');
+const { isProducerConnected } = require('./kafka/producer');
+const { isConsumerRunning } = require('./kafka/alertConsumer');
+const { checkKafkaReadiness } = require('./utils/kafkaReadiness');
+const { checkMlReadiness, READINESS_TIMEOUT_MS } = require('./utils/mlReadiness');
 
 const app = express();
 configureTrustedProxy(app);
@@ -39,6 +45,48 @@ app.get('/', (req, res) => res.json({
   message: 'Fraud Detection API is operational',
 }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+let databaseProbe;
+function checkDatabase() {
+  if (!databaseProbe) {
+    databaseProbe = Promise.resolve()
+      .then(() => query({ text: 'SELECT 1', query_timeout: READINESS_TIMEOUT_MS }))
+      .finally(() => { databaseProbe = undefined; });
+  }
+  return databaseProbe;
+}
+
+async function checkReadiness() {
+  const mode = (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase();
+  if (mode !== 'inline' && (mode !== 'kafka' || !isProducerConnected() || !isConsumerRunning())) return false;
+
+  const signal = AbortSignal.timeout(READINESS_TIMEOUT_MS);
+  let onTimeout;
+  try {
+    const timeout = new Promise((resolve) => {
+      onTimeout = () => resolve(false);
+      signal.addEventListener('abort', onTimeout, { once: true });
+    });
+    return await Promise.race([
+      Promise.all([
+        checkDatabase(),
+        checkMlReadiness(),
+        mode === 'inline' || checkKafkaReadiness(),
+      ]).then(([, ml, transport]) => ml && transport),
+      timeout,
+    ]);
+  } catch {
+    return false;
+  } finally {
+    if (onTimeout) signal.removeEventListener('abort', onTimeout);
+  }
+}
+
+app.get('/ready', async (_req, res) => {
+  const ready = await checkReadiness();
+  res.set('Cache-Control', 'no-store').status(ready ? 200 : 503)
+    .json({ status: ready ? 'ok' : 'unavailable' });
+});
 
 // OpenAPI 3.0 JSON spec & Swagger UI (/api-docs and /api-docs/openapi.json)
 const swaggerDirs = [
