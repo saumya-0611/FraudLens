@@ -20,15 +20,26 @@ function enabledGitHub(env = process.env) {
   return { name: 'github', origin, redirectUri, clientId, clientSecret };
 }
 
+function githubError(message, code, providerError) {
+  return Object.assign(new Error(message), { code, error: providerError });
+}
+
 async function responseJson(fetch, url, options) {
-  const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(8000) });
-  if (response.status !== 200 ||
-      response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
-    throw new Error('Unexpected GitHub OAuth response.');
+  const exchange = url === TOKEN_URL;
+  const responseCode = exchange ? 'GITHUB_TOKEN_RESPONSE' : 'GITHUB_USER_RESPONSE';
+  let response;
+  try {
+    response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(8000) });
+  } catch {
+    throw githubError('GitHub OAuth request failed.', exchange ? 'GITHUB_TOKEN_REQUEST' : 'GITHUB_USER_REQUEST');
   }
-  const payload = await response.json();
+  const json = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() === 'application/json';
+  const payload = json ? await response.json().catch(() => null) : null;
+  if (response.status !== 200 || !json) {
+    throw githubError('Unexpected GitHub OAuth response.', responseCode, exchange ? payload?.error : undefined);
+  }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.hasOwn(payload, 'error')) {
-    throw new Error('Invalid GitHub OAuth response.');
+    throw githubError('Invalid GitHub OAuth response.', responseCode, exchange ? payload?.error : undefined);
   }
   return payload;
 }
@@ -53,7 +64,7 @@ function createGitHubClient(provider, fetch = globalThis.fetch) {
       if (callback.origin + callback.pathname !== provider.redirectUri ||
           callback.searchParams.get('state') !== attempt.state || !code || callback.searchParams.has('iss') ||
           !verifierPattern.test(attempt.code_verifier ?? '')) {
-        throw new Error('Invalid GitHub OAuth callback or PKCE verifier.');
+        throw githubError('Invalid GitHub OAuth callback or PKCE verifier.', 'GITHUB_CALLBACK_INVALID');
       }
       const token = await responseJson(fetch, TOKEN_URL, {
         method: 'POST',
@@ -67,11 +78,15 @@ function createGitHubClient(provider, fetch = globalThis.fetch) {
         }),
       });
       // A dedicated, expiring-token OAuth App must issue an unscoped bearer token.
+      if (!Number.isSafeInteger(token.expires_in) || token.expires_in < 1 || token.expires_in > 28_800) {
+        throw githubError('Invalid GitHub OAuth access token expiry.', 'GITHUB_TOKEN_EXPIRY');
+      }
+      if (token.scope !== '') {
+        throw githubError('GitHub OAuth token has unexpected scopes.', 'GITHUB_TOKEN_SCOPE');
+      }
       if (typeof token.access_token !== 'string' || !/^[A-Za-z0-9_]+$/.test(token.access_token) ||
-          token.access_token.length > 512 || typeof token.token_type !== 'string' || token.token_type.toLowerCase() !== 'bearer' ||
-          token.scope !== '' || !Number.isSafeInteger(token.expires_in) ||
-          token.expires_in < 1 || token.expires_in > 28_800) {
-        throw new Error('Invalid GitHub OAuth access token response.');
+          token.access_token.length > 512 || typeof token.token_type !== 'string' || token.token_type.toLowerCase() !== 'bearer') {
+        throw githubError('Invalid GitHub OAuth access token response.', 'GITHUB_TOKEN_FORMAT');
       }
       const user = await responseJson(fetch, USER_URL, {
         method: 'GET',
@@ -83,7 +98,7 @@ function createGitHubClient(provider, fetch = globalThis.fetch) {
         },
       });
       if (!Number.isSafeInteger(user.id) || user.id < 1) {
-        throw new Error('Invalid GitHub account identifier.');
+        throw githubError('Invalid GitHub account identifier.', 'GITHUB_USER_ID');
       }
       return { issuer: GITHUB_NAMESPACE, subject: String(user.id) };
     },

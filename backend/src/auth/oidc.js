@@ -18,6 +18,24 @@ const providers = {
 const localOrigins = new Set(['localhost', '127.0.0.1', '[::1]']);
 const cache = new WeakMap();
 
+async function linkedInFetch(fetch, url, options) {
+  const response = await fetch(url, options);
+  if (String(url) !== providers.linkedin.token_endpoint || options?.method !== 'POST' ||
+      response.status !== 200 ||
+      response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return response;
+  }
+
+  const token = await response.clone().json().catch(() => null);
+  // LinkedIn documents bearer tokens but can omit token_type in this response.
+  // The OIDC library still validates every signed ID token and its claims.
+  if (!token || Object.hasOwn(token, 'error') || Object.hasOwn(token, 'token_type') ||
+      typeof token.access_token !== 'string' || typeof token.id_token !== 'string') {
+    return response;
+  }
+  return Response.json({ ...token, token_type: 'Bearer' }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
 function enabledProviders(env = process.env) {
   if (env.SOCIAL_OAUTH_ENABLED !== 'true') return {};
   if (parseOrigin(env.OAUTH_PUBLIC_ORIGIN) !== env.OAUTH_PUBLIC_ORIGIN) {
@@ -55,7 +73,11 @@ async function createProviderClient(provider, customFetch) {
   }, oidc.ClientSecretPost(provider.clientSecret));
   config.timeout = 8;
   oidc.enableNonRepudiationChecks(config);
-  if (customFetch) config[oidc.customFetch] = customFetch;
+  if (provider.name === 'linkedin') {
+    config[oidc.customFetch] = (url, options) => linkedInFetch(customFetch ?? globalThis.fetch, url, options);
+  } else if (customFetch) {
+    config[oidc.customFetch] = customFetch;
+  }
 
   return {
     async begin(state) {

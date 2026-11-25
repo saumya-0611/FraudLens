@@ -30,7 +30,16 @@ const router = require('../routes/oauth.routes');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 
-const app = express().use(cookieParser()).use('/api/auth', router);
+let testClient = 0;
+const app = express()
+  .use((req, _res, next) => {
+    // Each test has its own client IP while repeated requests within that test share a limit.
+    Object.defineProperty(req, 'ip', { value: '192.0.2.' + testClient });
+    req.id = 'r-010203';
+    next();
+  })
+  .use(cookieParser())
+  .use('/api/auth', router);
 app.get('/admin-fixture', authenticate, authorize('ADMIN'), (_req, res) => res.status(204).end());
 const origins = { google: 'https://accounts.google.com', linkedin: 'https://www.linkedin.com/oauth', github: 'https://github.com' };
 const viewer = { id: 51, username: 'social-local-viewer', role: 'VIEWER', status: 'ACTIVE' };
@@ -51,6 +60,7 @@ beforeAll(async () => {
 afterAll(() => new Promise((resolve) => server.close(resolve)));
 beforeEach(() => {
   jest.resetAllMocks();
+  testClient += 1;
   attempts = new Map();
   store.ready.mockResolvedValue(true);
   store.saveAttempt.mockImplementation(async (attempt) => attempts.set(attempt.stateHash, attempt));
@@ -179,6 +189,34 @@ test('denied consent, provider errors and reused codes expose only fixed errors'
   expect(invalid.headers.location).toBe('/?oauth_error=provider');
   expect(invalid.text).not.toContain('PRIVATE-FIXTURE');
   expect(store.resolveIdentity).not.toHaveBeenCalled();
+});
+
+test('records the callback stage and known provider code without logging provider descriptions', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    verify.mockRejectedValueOnce(Object.assign(new Error('PRIVATE-FIXTURE'), { code: 'OAUTH_RESPONSE_BODY_ERROR', error: 'invalid_client' }));
+    const failure = await callback('linkedin', await start('linkedin'));
+    expect(failure.headers.location).toBe('/?oauth_error=provider');
+    expect(failure.text).not.toContain('PRIVATE-FIXTURE');
+    expect(warn).toHaveBeenCalledWith('[OAuth callback failed]', expect.objectContaining({
+      provider: 'linkedin', stage: 'provider_verification', reason: 'invalid_client', requestId: 'r-010203',
+    }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE-FIXTURE');
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'LOGIN_FAILURE',
+      details: expect.objectContaining({ stage: 'provider_verification', reason: 'invalid_client' }),
+    }));
+
+    store.resolveIdentity.mockRejectedValueOnce(Object.assign(new Error('PRIVATE-DB-FIXTURE'), { code: '23505' }));
+    const identityFailure = await callback('github', await start('github'));
+    expect(identityFailure.headers.location).toBe('/?oauth_error=provider');
+    expect(warn).toHaveBeenLastCalledWith('[OAuth callback failed]', expect.objectContaining({
+      provider: 'github', stage: 'identity_lookup', reason: '23505',
+    }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE-DB-FIXTURE');
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test('linking requires an authenticated, same-origin POST and the same session at completion', async () => {

@@ -75,6 +75,19 @@ test('GitHub rejects a mismatched PKCE verifier before the user request', async 
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
+test.each([200, 400])('retains the token exchange error code for HTTP %i without the description', async (status) => {
+  const { fetch, json, client, callback, attempt } = setup();
+  fetch.mockResolvedValueOnce(json({
+    error: 'incorrect_client_credentials',
+    error_description: 'private provider description',
+  }, status));
+  await expect(client.verify(callback, attempt)).rejects.toMatchObject({
+    code: 'GITHUB_TOKEN_RESPONSE', error: 'incorrect_client_credentials',
+    message: expect.not.stringContaining('private provider description'),
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 test.each([
   { access_token: null }, { access_token: 'line\nbreak' }, { token_type: 'other' },
   { scope: 'repo' }, { expires_in: undefined }, { expires_in: 90_000 }, { error: 'invalid_grant' },
