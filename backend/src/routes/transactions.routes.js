@@ -190,7 +190,7 @@ router.get(
       risk_category: row.risk_category || 'PENDING',
       fraud_probability: row.fraud_probability,
       anomaly_score: row.anomaly_score,
-      is_anomaly: row.is_anomaly ?? false,
+      is_anomaly: row.is_anomaly ?? null,
       model_version: row.model_version,
       tx_time: row.tx_time,
       ingested_at: row.ingested_at,

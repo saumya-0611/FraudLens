@@ -27,4 +27,23 @@ pool.on('error', (err) => console.error('Unexpected PG pool error:', err.message
 const query = (text, params) => pool.query(text, params);
 const unpooledQuery = (text, params) => unpooledPool.query(text, params);
 
-module.exports = { pool, query, unpooledPool, unpooledQuery };
+async function withTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      error.rollbackError = rollbackError;
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, query, unpooledPool, unpooledQuery, withTransaction };

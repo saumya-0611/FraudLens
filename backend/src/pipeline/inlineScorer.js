@@ -8,7 +8,7 @@
  * writes the hash-chained ALERT_RAISED audit row, and broadcasts over /ws/alerts.
  */
 const env = require('../config/env');
-const { query } = require('../config/db');
+const { query, withTransaction } = require('../config/db');
 const { audit } = require('../audit/auditLogger');
 const { broadcastAlert, sanitizeAlert } = require('../websocket/alertSocket');
 const { maskAccount } = require('../utils/mask');
@@ -128,11 +128,36 @@ async function touchStreamingHeartbeat() {
 }
 
 let heartbeatTimer = null;
+let recoveryRunning = false;
+
+async function recoverPendingTransactions() {
+  if (recoveryRunning) return;
+  recoveryRunning = true;
+  try {
+    const pending = await query(
+      `SELECT t.${TRANSACTION_COLUMNS.split(',').join(', t.')}
+       FROM transactions t
+       LEFT JOIN fraud_results fr ON fr.transaction_id = t.transaction_id
+       WHERE fr.transaction_id IS NULL
+       ORDER BY t.ingested_at ASC
+       LIMIT 10`
+    );
+    await Promise.allSettled((pending.rows || []).map((transaction) => scoreTransactionInline(transaction)));
+  } catch (error) {
+    console.warn('[InlineScorer] Pending recovery warning:', error.message);
+  } finally {
+    recoveryRunning = false;
+  }
+}
 
 function startInlineHeartbeat() {
   if (heartbeatTimer) return;
   touchStreamingHeartbeat();
-  heartbeatTimer = setInterval(touchStreamingHeartbeat, 25000);
+  void recoverPendingTransactions();
+  heartbeatTimer = setInterval(() => {
+    touchStreamingHeartbeat();
+    void recoverPendingTransactions();
+  }, 25000);
   if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
 }
 
@@ -143,159 +168,176 @@ function stopInlineHeartbeat() {
   }
 }
 
-async function scoreTransactionInline(tx) {
-  const ingestedAt = tx.ingested_at || new Date().toISOString();
+const TRANSACTION_COLUMNS = `transaction_id, account_ref, amount, tx_time, category, merchant,
+  lat, lon, merch_lat, merch_lon, customer_age, ingested_at`;
 
-  // 1. Load latest 50 prior transactions for account lookback
-  const histRes = await query(
+async function persistPendingTransaction(tx) {
+  await query(
+    `INSERT INTO transactions (${TRANSACTION_COLUMNS})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (transaction_id) DO NOTHING`,
+    [
+      String(tx.transaction_id), String(tx.account_ref), Number(tx.amount), tx.tx_time,
+      String(tx.category), tx.merchant || null, tx.lat ?? null, tx.lon ?? null,
+      tx.merch_lat ?? null, tx.merch_lon ?? null, tx.customer_age ?? null,
+      tx.ingested_at || new Date().toISOString(),
+    ]
+  );
+}
+
+function parsePrediction(payload, transactionId) {
+  if (!payload || typeof payload.model_version !== 'string' || !payload.model_version.trim() ||
+      payload.model_version.length > 30 || !Array.isArray(payload.predictions) ||
+      payload.predictions.length !== 1) return null;
+  const prediction = payload.predictions[0];
+  if (!prediction || prediction.transaction_id !== transactionId ||
+      typeof prediction.is_anomaly !== 'boolean' ||
+      !Number.isFinite(prediction.fraud_probability) ||
+      prediction.fraud_probability < 0 || prediction.fraud_probability > 1 ||
+      !Number.isFinite(prediction.anomaly_score) ||
+      prediction.anomaly_score < 0 || prediction.anomaly_score > 1 ||
+      !Array.isArray(prediction.top_reasons) ||
+      prediction.top_reasons.some((reason) => !reason ||
+        typeof reason.feature !== 'string' || typeof reason.text !== 'string' ||
+        !Number.isFinite(reason.impact))) return null;
+  return { ...prediction, model_version: payload.model_version };
+}
+
+async function requestPrediction(tx, client) {
+  const histRes = await client.query(
     `SELECT transaction_id, amount, tx_time
-     FROM transactions
-     WHERE account_ref = $1
-     ORDER BY tx_time DESC
-     LIMIT 50`,
+     FROM transactions WHERE account_ref = $1
+     ORDER BY tx_time DESC LIMIT 50`,
     [String(tx.account_ref)]
   );
-
   const features = computeFeatures(tx, histRes.rows || []);
-
-  // 2. Call ml-service /predict with X-Internal-Token
   const mlBase = (env.mlServiceUrl || 'http://localhost:8000').replace(/\/+$/, '');
   const headers = { 'Content-Type': 'application/json' };
   if (env.internalMlToken) headers['X-Internal-Token'] = env.internalMlToken;
 
-  let modelVersion = 'v1';
-  let fraudProbability = 0.01;
-  let anomalyScore = 0.0;
-  let isAnomaly = false;
-  let topReasons = [];
-
   try {
-    const res = await fetch(`${mlBase}/predict`, {
+    const response = await fetch(`${mlBase}/predict`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        instances: [{ transaction_id: String(tx.transaction_id), features }],
-      }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+      body: JSON.stringify({ instances: [{ transaction_id: String(tx.transaction_id), features }] }),
+      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+        ? AbortSignal.timeout(15000)
+        : undefined,
     });
-    if (res.ok) {
-      const payload = await res.json();
-      modelVersion = payload.model_version || 'v1';
-      const pred = (payload.predictions || [])[0];
-      if (pred) {
-        fraudProbability = Number(pred.fraud_probability ?? 0.01);
-        anomalyScore = Number(pred.anomaly_score ?? 0.0);
-        isAnomaly = Boolean(pred.is_anomaly);
-        topReasons = Array.isArray(pred.top_reasons) ? pred.top_reasons : [];
-      }
-    } else {
-      console.error(`[InlineScorer] ML /predict returned HTTP ${res.status}`);
+    if (!response.ok) {
+      console.error(`[InlineScorer] ML /predict returned HTTP ${response.status}`);
+      return null;
     }
-  } catch (err) {
-    console.error('[InlineScorer] ML /predict failed:', err.message);
+    const prediction = parsePrediction(await response.json(), String(tx.transaction_id));
+    return prediction ? { prediction, features } : null;
+  } catch (error) {
+    console.error('[InlineScorer] ML /predict failed:', error.message);
+    return null;
   }
+}
 
-  const riskCategory = classifyRisk(fraudProbability, isAnomaly);
-
-  // 3. Persist transaction + fraud_result idempotently
-  await query(
-    `INSERT INTO transactions (
-       transaction_id, account_ref, amount, tx_time, category, merchant,
-       lat, lon, merch_lat, merch_lon, customer_age, ingested_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (transaction_id) DO NOTHING`,
-    [
-      String(tx.transaction_id),
-      String(tx.account_ref),
-      Number(tx.amount),
-      tx.tx_time,
-      String(tx.category),
-      tx.merchant || null,
-      tx.lat ?? null,
-      tx.lon ?? null,
-      tx.merch_lat ?? null,
-      tx.merch_lon ?? null,
-      tx.customer_age ?? null,
-      ingestedAt,
-    ]
-  );
-
-  await query(
-    `INSERT INTO fraud_results (
-       transaction_id, fraud_probability, anomaly_score, is_anomaly,
-       risk_category, top_reasons, features, model_version, scored_at
-     ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,NOW())
-     ON CONFLICT (transaction_id) DO NOTHING`,
-    [
-      String(tx.transaction_id),
-      fraudProbability,
-      anomalyScore,
-      isAnomaly,
-      riskCategory,
-      JSON.stringify(topReasons),
-      JSON.stringify(features),
-      modelVersion,
-    ]
-  );
-
-  // 4. Create alert, append hash-chained audit row, and broadcast on HIGH_RISK
-  if (riskCategory === 'HIGH_RISK') {
-    const alertRes = await query(
-      `INSERT INTO alerts (transaction_id, risk_score, state)
-       VALUES ($1, $2, 'NEW')
-       ON CONFLICT (transaction_id) DO NOTHING
-       RETURNING alert_id, created_at`,
-      [String(tx.transaction_id), fraudProbability]
+async function scoreTransactionInline(tx) {
+  const transactionId = String(tx.transaction_id);
+  const outcome = await withTransaction(async (client) => {
+    const stored = await client.query(
+      `SELECT ${TRANSACTION_COLUMNS} FROM transactions
+       WHERE transaction_id = $1 FOR UPDATE`,
+      [transactionId]
     );
-    const created = alertRes.rows && alertRes.rows[0];
-    if (created) {
-      const alertObj = sanitizeAlert({
-        alert_id: created.alert_id,
-        transaction_id: String(tx.transaction_id),
-        account_masked: maskAccount(String(tx.account_ref)),
-        amount: Number(tx.amount),
-        category: String(tx.category),
-        risk_score: fraudProbability,
-        risk_category: riskCategory,
-        top_reasons: topReasons,
-        model_version: modelVersion,
-        created_at: created.created_at instanceof Date
-          ? created.created_at.toISOString()
-          : new Date().toISOString(),
-      });
+    const transaction = stored.rows?.[0];
+    if (!transaction) throw new Error(`Pending transaction ${transactionId} was not persisted`);
 
-      try {
-        await audit({
-          userId: null,
-          username: 'system',
-          action: 'ALERT_RAISED',
-          entity: 'alert',
-          entityId: String(created.alert_id),
-          details: {
-            transaction_id: alertObj.transaction_id,
-            risk_score: alertObj.risk_score,
-            risk_category: alertObj.risk_category,
-            amount: alertObj.amount,
-            category: alertObj.category,
-          },
+    const priorResult = await client.query(
+      `SELECT fraud_probability, anomaly_score, is_anomaly, risk_category,
+              top_reasons, features, model_version, scored_at
+       FROM fraud_results WHERE transaction_id = $1`,
+      [transactionId]
+    );
+    if (priorResult.rows?.[0]) return { alreadyScored: true };
+
+    const predictionResult = await requestPrediction(transaction, client);
+    if (!predictionResult) return { pending: true };
+    const { prediction, features } = predictionResult;
+
+    const riskCategory = classifyRisk(prediction.fraud_probability, prediction.is_anomaly);
+    const inserted = await client.query(
+      `INSERT INTO fraud_results (
+         transaction_id, fraud_probability, anomaly_score, is_anomaly,
+         risk_category, top_reasons, features, model_version, scored_at
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,NOW())
+       ON CONFLICT (transaction_id) DO NOTHING
+       RETURNING transaction_id`,
+      [transactionId, prediction.fraud_probability, prediction.anomaly_score,
+        prediction.is_anomaly, riskCategory, JSON.stringify(prediction.top_reasons),
+        JSON.stringify(features), prediction.model_version]
+    );
+    if (!inserted.rows?.[0]) return { alreadyScored: true };
+
+    let alert = null;
+    if (riskCategory === 'HIGH_RISK') {
+      const alertRes = await client.query(
+        `INSERT INTO alerts (transaction_id, risk_score, state)
+         VALUES ($1, $2, 'NEW')
+         ON CONFLICT (transaction_id) DO NOTHING
+         RETURNING alert_id, created_at`,
+        [transactionId, prediction.fraud_probability]
+      );
+      const created = alertRes.rows?.[0];
+      if (created) {
+        alert = sanitizeAlert({
+          alert_id: created.alert_id,
+          transaction_id: transactionId,
+          account_masked: maskAccount(String(transaction.account_ref)),
+          amount: Number(transaction.amount),
+          category: String(transaction.category),
+          risk_score: prediction.fraud_probability,
+          risk_category: riskCategory,
+          top_reasons: prediction.top_reasons,
+          model_version: prediction.model_version,
+          created_at: created.created_at instanceof Date
+            ? created.created_at.toISOString()
+            : new Date(created.created_at).toISOString(),
         });
-      } catch (err) {
-        console.error('[InlineScorer] Audit log failed:', err.message);
       }
+    }
+    return { scored: true, alert };
+  });
 
-      try {
-        broadcastAlert(alertObj);
-      } catch (err) {
-        console.error('[InlineScorer] WebSocket broadcast warning:', err.message);
-      }
+  if (outcome?.alert) {
+    try {
+      await audit({
+        userId: null,
+        username: 'system',
+        action: 'ALERT_RAISED',
+        entity: 'alert',
+        entityId: String(outcome.alert.alert_id),
+        details: {
+          transaction_id: outcome.alert.transaction_id,
+          risk_score: outcome.alert.risk_score,
+          risk_category: outcome.alert.risk_category,
+          amount: outcome.alert.amount,
+          category: outcome.alert.category,
+        },
+      });
+    } catch (error) {
+      console.error('[InlineScorer] Audit log failed:', error.message);
+    }
+    try {
+      await broadcastAlert(outcome.alert);
+    } catch (error) {
+      console.error('[InlineScorer] WebSocket broadcast warning:', error.message);
     }
   }
 
-  await touchStreamingHeartbeat();
+  if (outcome?.scored) await touchStreamingHeartbeat();
+  return outcome;
 }
 
 module.exports = {
   scoreTransactionInline,
+  persistPendingTransaction,
+  parsePrediction,
+  recoverPendingTransactions,
   computeFeatures,
   classifyRisk,
   startInlineHeartbeat,

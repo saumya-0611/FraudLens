@@ -125,7 +125,7 @@ export default function Transactions() {
               <p><b>Merchant</b><span>{detail.merchant || "—"}</span></p>
               <p><b>Risk</b><RiskBadge value={detail.risk_category} /></p>
               <p><b>Fraud probability</b><span>{detail.fraud_probability == null ? "Unscored" : `${(detail.fraud_probability * 100).toFixed(1)}%`}</span></p>
-              <p><b>Anomaly</b><span>{detail.is_anomaly ? "Yes" : "No"}</span></p>
+              <p><b>Anomaly</b><span>{detail.is_anomaly === null || detail.is_anomaly === undefined ? "Pending" : detail.is_anomaly ? "Yes" : "No"}</span></p>
               <p><b>Model version</b><span>{detail.model_version || "—"}</span></p>
               <p><b>Transaction time</b><span>{localTime(timestamps.tx_time)}</span></p>
               <p><b>Scored at</b><span>{localTime(timestamps.scored_at)}</span></p>

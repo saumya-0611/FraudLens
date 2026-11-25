@@ -45,6 +45,25 @@ describe('Transaction Route Tests', () => {
     expect(publishTransaction).toHaveBeenCalledWith(transaction);
   });
 
+  test('ADMIN may submit while ANALYST and VIEWER remain denied', async () => {
+    const transaction = {
+      transaction_id: 'tx-admin-submit',
+      account_ref: 'account-123456',
+      amount: 25,
+      tx_time: '2026-11-18T14:00:00.000Z',
+      category: 'retail',
+    };
+    const admin = await request(app).post('/api/transactions')
+      .set('Cookie', sessionCookie('ADMIN')).send(transaction);
+    expect(admin.status).toBe(202);
+
+    for (const role of ['ANALYST', 'VIEWER']) {
+      const denied = await request(app).post('/api/transactions')
+        .set('Cookie', sessionCookie(role)).send(transaction);
+      expect(denied.status).toBe(403);
+    }
+  });
+
   test('GET /api/transactions returns paginated and masked transactions', async () => {
     query
       .mockResolvedValueOnce({
@@ -123,6 +142,44 @@ describe('Transaction Route Tests', () => {
     expect(response.body.features).toEqual({ amount: 500, enrichment: [{ score: 1 }] });
     expect(response.text).not.toContain('fixture-secret-ref');
     expect(response.body.alert.state).toBe('NEW');
+  });
+
+  test('GET /api/transactions/:id preserves an unscored transaction as PENDING without invented prediction fields', async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        transaction_id: 'tx-still-pending',
+        account_ref: 'account-123456',
+        amount: '40.00',
+        category: 'retail',
+        merchant: null,
+        tx_time: '2026-11-21T10:00:00.000Z',
+        ingested_at: '2026-11-21T10:00:01.000Z',
+        risk_category: null,
+        fraud_probability: null,
+        anomaly_score: null,
+        is_anomaly: null,
+        top_reasons: null,
+        features: null,
+        model_version: null,
+        scored_at: null,
+        alert_id: null,
+      }],
+    });
+
+    const response = await request(app)
+      .get('/api/transactions/tx-still-pending').set('Cookie', cookie);
+
+    expect(response.status).toBe(200);
+    expect(response.body.risk_category).toBe('PENDING');
+    expect(response.body.fraud_probability).toBeNull();
+    expect(response.body.anomaly_score).toBeNull();
+    expect(response.body.is_anomaly).toBeNull();
+    expect(response.body.model_version).toBeNull();
+    expect(response.body.top_reasons).toEqual([]);
+    expect(response.body.features).toEqual({});
+    expect(response.body.alert).toBeNull();
+    expect(response.body.account_masked).toBe('XXXX-3456');
+    expect(response.text).not.toContain('account-123456');
   });
 
   test.each(['XXXX-4321', 'review-tx', 'merchant name'])('search binds %s and compares only the masked account', async (term) => {
