@@ -78,8 +78,8 @@ export async function mockRequest(path, options = {}) {
         if (!username || !body.password || !["ADMIN", "ANALYST", "VIEWER"].includes(body.role)) {
             return failure("VALIDATION_ERROR", "Valid username, password, and role are required.");
         }
-        if (String(body.password).length < 6) {
-            return failure("VALIDATION_ERROR", "Password must be at least 6 characters.");
+        if (String(body.password).trim().length < 10) {
+            return failure("VALIDATION_ERROR", "Password must be at least 10 characters.");
         }
         if (users.some(user => user.username === username)) {
             return failure("CONFLICT", "Username already exists.", 409);
