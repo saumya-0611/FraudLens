@@ -20,7 +20,7 @@ function config(name) {
   })[name];
 }
 
-async function fixture(name, changed = {}, key = signing.privateKey, acceptedCode = 'fixture-code') {
+async function fixture(name, changed = {}, key = signing.privateKey, acceptedCode = 'fixture-code', tokenFields = {}) {
   const provider = config(name);
   let attempt;
   let codeUsed = false;
@@ -42,7 +42,7 @@ async function fixture(name, changed = {}, key = signing.privateKey, acceptedCod
       exp: Math.floor(Date.now() / 1000) + 600, nonce: attempt.nonce,
       ...changed,
     }, key, { algorithm: 'RS256', keyid: 'fixture' });
-    return Response.json({ id_token: idToken, access_token: 'private-fixture', token_type: 'Bearer' });
+    return Response.json({ id_token: idToken, access_token: 'private-fixture', token_type: 'Bearer', ...tokenFields });
   };
   const client = await createProviderClient(provider, fetch);
   const state = 'attempt-fixture-state';
@@ -93,6 +93,27 @@ for (const [description, claims] of [
 test('rejects an ID token signed by a key outside the configured JWKS', async () => {
   const { client, attempt, callback } = await fixture('linkedin', {}, other.privateKey);
   await assert.rejects(() => client.verify(callback, attempt));
+});
+
+test('LinkedIn can omit token_type while preserving signature and nonce verification', async () => {
+  const fields = { token_type: undefined };
+  const valid = await fixture('linkedin', {}, signing.privateKey, 'fixture-code', fields);
+  assert.deepEqual(await valid.client.verify(valid.callback, valid.attempt), {
+    issuer: issuers.linkedin, subject: 'same-provider-fixture',
+  });
+
+  const missingNonce = await fixture('linkedin', { nonce: undefined }, signing.privateKey, 'fixture-code', fields);
+  await assert.rejects(() => missingNonce.client.verify(missingNonce.callback, missingNonce.attempt));
+
+  const invalidSignature = await fixture('linkedin', {}, other.privateKey, 'fixture-code', fields);
+  await assert.rejects(() => invalidSignature.client.verify(invalidSignature.callback, invalidSignature.attempt));
+});
+
+test('a missing token type on Google and an unsupported LinkedIn token type are rejected', async () => {
+  for (const [name, token_type] of [['google', undefined], ['linkedin', 'Unsupported']]) {
+    const attempt = await fixture(name, {}, signing.privateKey, 'fixture-code', { token_type });
+    await assert.rejects(() => attempt.client.verify(attempt.callback, attempt.attempt));
+  }
 });
 
 test('rejects the wrong state before token exchange', async () => {
