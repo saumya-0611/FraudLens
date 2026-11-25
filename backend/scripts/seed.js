@@ -1,35 +1,45 @@
 const bcrypt = require('bcryptjs');
 const { pool } = require('../src/config/db');
 
-const seeds = [
+const SEED_ACCOUNTS = [
   ['admin', 'ADMIN', 'SEED_ADMIN_PASSWORD'],
   ['analyst', 'ANALYST', 'SEED_ANALYST_PASSWORD'],
   ['viewer', 'VIEWER', 'SEED_VIEWER_PASSWORD'],
 ];
 
 async function seedUsers() {
-  const seeds = [
-    ['admin', 'ADMIN', 'SEED_ADMIN_PASSWORD'],
-    ['analyst', 'ANALYST', 'SEED_ANALYST_PASSWORD'],
-    ['viewer', 'VIEWER', 'SEED_VIEWER_PASSWORD'],
-  ];
+  const existingResult = await pool.query(
+    'SELECT username FROM users WHERE username = ANY($1::text[])',
+    [SEED_ACCOUNTS.map(([username]) => username)]
+  );
+  const existing = new Set((existingResult.rows || []).map((row) => row.username));
+  const missing = SEED_ACCOUNTS.filter(([username]) => !existing.has(username));
 
-  for (const [username, role, key] of seeds) {
-    const password = process.env[key] || (key === 'SEED_ADMIN_PASSWORD' ? 'FlAdmin#2026!Secure' : key === 'SEED_ANALYST_PASSWORD' ? 'FlAnalyst#2026!Safe' : 'FlViewer#2026!Read');
-    const hash = await bcrypt.hash(password, 10);
+  for (const [username, , key] of missing) {
+    const password = process.env[key];
+    if (typeof password !== 'string' || password.trim().length === 0 || /^change_me/i.test(password.trim())) {
+      throw new Error(`${key} is required to create the ${username} seed account.`);
+    }
+  }
+
+  for (const [username, role, key] of missing) {
+    const hash = await bcrypt.hash(process.env[key], 10);
     await pool.query(
       `INSERT INTO users (username, password_hash, role, status)
        VALUES ($1, $2, $3, 'ACTIVE')
-       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, status = 'ACTIVE'`,
+       ON CONFLICT (username) DO NOTHING`,
       [username, hash, role]
     );
   }
+
+  return { created: missing.length, skipped: existing.size };
 }
 
 async function main() {
   try {
-    await seedUsers();
-    console.log('[seed] Finished. Existing accounts were skipped.');
+    const result = await seedUsers();
+    console.log(`[seed] Initialization complete (${result.created} created, ${result.skipped} existing).`);
+    return result;
   } finally {
     await pool.end();
   }

@@ -4,10 +4,7 @@ const app = require('./app');
 const { initAlertSocket, closeAlertSocket } = require('./websocket/alertSocket');
 const { startAlertConsumer, stopAlertConsumer } = require('./kafka/alertConsumer');
 const { connectProducer, disconnectProducer } = require('./kafka/producer');
-const { query } = require('./config/db');
 const { ensureSchema } = require('../scripts/bootstrapSchema');
-const { seedUsers } = require('../scripts/seed');
-const { seedSampleData } = require('../scripts/seed_sample_data');
 
 // Plain http.Server (not app.listen) so the WebSocket server (B5) attaches to it.
 const server = http.createServer(app);
@@ -17,24 +14,15 @@ initAlertSocket(server);
 
 const inlineMode = (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase() === 'inline';
 
-server.listen(env.port, () => {
+async function startServer() {
+  if (env.nodeEnv !== 'test') await ensureSchema();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(env.port, resolve);
+  });
   console.log(`FraudLens backend listening on port ${env.port} (pipeline=${inlineMode ? 'inline' : 'kafka'})`);
-  if (env.nodeEnv !== 'test') {
-    ensureSchema()
-      .then(() => query("DELETE FROM users WHERE password_hash !~ '^\\$2[aby]\\$'"))
-      .then(() => seedUsers())
-      .then(async () => {
-        if (process.env.AUTO_SEED_SAMPLE === 'true') {
-          const { rows } = await query('SELECT COUNT(*)::int AS cnt FROM transactions');
-          if (Number(rows?.[0]?.cnt || 0) === 0) {
-            await seedSampleData(60);
-          }
-        }
-      })
-      .catch((err) => {
-        console.error('[Bootstrap] Initial schema/seed warning:', err.message);
-      });
 
+  if (env.nodeEnv !== 'test') {
     connectProducer().catch((err) => {
       console.error('[Kafka] Producer initial connect warning:', err.message);
     });
@@ -45,7 +33,15 @@ server.listen(env.port, () => {
       });
     }
   }
-});
+  return server;
+}
+
+if (require.main === module) {
+  startServer().catch((err) => {
+    console.error('[Bootstrap] Backend startup failed:', err.code || err.message);
+    process.exitCode = 1;
+  });
+}
 
 // Stop cleanly on docker stop / Ctrl+C.
 let isShuttingDown = false;
@@ -66,3 +62,4 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 module.exports = server;
+module.exports.startServer = startServer;

@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 jest.mock('../config/db', () => ({ pool: { query: jest.fn(), end: jest.fn() } }));
 
 const { pool } = require('../config/db');
-const { main } = require('../../scripts/seed');
+const { main, seedUsers } = require('../../scripts/seed');
 
 const keys = ['SEED_ADMIN_PASSWORD', 'SEED_ANALYST_PASSWORD', 'SEED_VIEWER_PASSWORD'];
 const passwords = ['Fixture-Admin-Only7', 'Fixture-Analyst-Only8', 'Fixture-Viewer-Only9'];
@@ -42,6 +42,13 @@ test('missing required configuration prevents all inserts and closes the pool', 
   expect(pool.end).toHaveBeenCalledTimes(1);
 });
 
+test('placeholder seed credentials are rejected before any account is inserted', async () => {
+  process.env.SEED_ADMIN_PASSWORD = 'change_me';
+  await expect(main()).rejects.toThrow('SEED_ADMIN_PASSWORD');
+  expect(pool.query).toHaveBeenCalledTimes(1);
+  expect(pool.end).toHaveBeenCalledTimes(1);
+});
+
 test('existing users are skipped without requiring their passwords', async () => {
   keys.forEach((key) => { delete process.env[key]; });
   pool.query.mockResolvedValue({
@@ -49,6 +56,23 @@ test('existing users are skipped without requiring their passwords', async () =>
   });
   await main();
   expect(pool.query).toHaveBeenCalledTimes(1);
+});
+
+test('a repeated initialization preserves accounts created by the first run', async () => {
+  pool.query
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: ['admin', 'analyst', 'viewer'].map(username => ({ username })) });
+
+  await seedUsers();
+  await seedUsers();
+
+  expect(pool.query).toHaveBeenCalledTimes(5);
+  expect(pool.query.mock.calls[1][0]).toContain('ON CONFLICT (username) DO NOTHING');
+  expect(pool.query.mock.calls[2][0]).toContain('ON CONFLICT (username) DO NOTHING');
+  expect(pool.query.mock.calls[3][0]).toContain('ON CONFLICT (username) DO NOTHING');
 });
 
 test('a database error still closes the pool', async () => {
