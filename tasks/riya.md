@@ -6,7 +6,7 @@ Backend and data science. Owns the transaction API, PostgreSQL read/write behavi
 
 ### R1
 
-- [ ] **Verify accepted, pending, and scored transaction readback** · Blocked by L1.
+- [x] **Verify accepted, pending, and scored transaction readback** · Passed using the disposable PostgreSQL lifecycle check on 25 November 2026.
 - **Goal** — Keep `POST /api/transactions` as a `202 ACCEPTED` acknowledgement. Make the same ID readable as `PENDING` with a null score when it is stored without a result, then return the persisted result and masked account after scoring. Keep the unknown-ID `404` and existing input validation.
 - **Files** — `backend/src/routes/transactions.routes.js`, `backend/src/validation/schemas.js` if needed, and `backend/src/tests/transactions.test.js`.
 - **Dependencies** — Lead [L1](lead.md#l1) supplies the durable unscored transaction. Shivansh [S1](shivansh.md#s1) verifies the authorization and masking boundaries in parallel. Amrita [A1](amrita.md#a1) consumes this API behavior.
@@ -15,7 +15,7 @@ Backend and data science. Owns the transaction API, PostgreSQL read/write behavi
 
 ### R2
 
-- [ ] **Keep retries consistent with the persisted decision** · Blocked by L1.
+- [x] **Keep retries consistent with the persisted decision** · Passed scorer regressions and concurrent intake, restart recovery, and replay checks on 25 November 2026.
 - **Goal** — Make an accepted transaction ID safe to retry after an outage and after success. Keep the first committed score authoritative. Create an alert only for a persisted high-risk result and publish the alert notification only for a newly created alert. Coordinate the write transaction with Lead.
 - **Files** — `backend/src/pipeline/inlineScorer.js`, `backend/src/config/db.js` if a transaction helper is needed, and planned `backend/src/tests/inlineScorer.test.js`. Check `database/init.sql` constraints before proposing a schema change.
 - **Dependencies** — Lead [L1](lead.md#l1) lands failure semantics first and owns the local runtime check in [L2](lead.md#l2).

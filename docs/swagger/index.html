@@ -539,52 +539,10 @@
             <p class="fl-subtitle">Real-Time Financial Fraud Detection &amp; Explainable AI Gateway &bull; OpenAPI 3.0</p>
           </div>
         </div>
-        <div class="fl-status-badges">
-          <div class="fl-badge">
-            <span class="fl-badge-dot"></span>
-            <span>Live Backend: <span style="color: #38bdf8;">fraudlens-backend-j17p</span></span>
-          </div>
-          <div class="fl-badge">
-            <span style="color: var(--accent-purple); font-weight: 700;">DB</span>
-            <span>Neon PostgreSQL 18</span>
-          </div>
-          <div class="fl-badge">
-            <span style="color: var(--accent-amber); font-weight: 700;">ML</span>
-            <span>XGBoost + Isolation Forest</span>
-          </div>
-        </div>
+
       </div>
 
-      <!-- Quick Test Credentials & One-Click Copy -->
-      <div class="fl-quick-bar">
-        <div class="fl-quick-title">
-          <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20">
-            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
-          </svg>
-          <span>Demo Credentials &amp; Tokens</span>
-        </div>
-        <div class="fl-creds-list">
-          <div class="fl-cred-item">
-            <span class="fl-cred-label">Admin:</span>
-            <span class="fl-cred-val">admin</span>
-            <span class="fl-cred-val" style="color:#94a3b8;">/</span>
-            <span class="fl-cred-val">FlAdmin#2026!Secure</span>
-            <button class="fl-copy-btn" onclick="copyText('FlAdmin#2026!Secure', this)">Copy</button>
-          </div>
-          <div class="fl-cred-item">
-            <span class="fl-cred-label">Analyst:</span>
-            <span class="fl-cred-val">analyst</span>
-            <span class="fl-cred-val" style="color:#94a3b8;">/</span>
-            <span class="fl-cred-val">FlAnalyst#2026!Safe</span>
-            <button class="fl-copy-btn" onclick="copyText('FlAnalyst#2026!Safe', this)">Copy</button>
-          </div>
-          <div class="fl-cred-item">
-            <span class="fl-cred-label">X-Service-Token:</span>
-            <span class="fl-cred-val">fl_service_token_simulator_2026</span>
-            <button class="fl-copy-btn" onclick="copyText('fl_service_token_simulator_2026', this)">Copy</button>
-          </div>
-        </div>
-      </div>
+
     </div>
   </header>
 
@@ -593,30 +551,18 @@
 
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script>
-    function copyText(val, btn) {
-      navigator.clipboard.writeText(val).then(() => {
-        const orig = btn.innerText;
-        btn.innerText = "Copied!";
-        btn.style.background = "#059669";
-        setTimeout(() => {
-          btn.innerText = orig;
-          btn.style.background = "";
-        }, 1500);
-      });
-    }
-
     window.onload = () => {
       window.ui = SwaggerUIBundle({
         url: "./openapi.json",
         dom_id: "#swagger-ui",
         deepLinking: true,
-        persistAuthorization: true,
+        persistAuthorization: false,
         filter: true,
         displayRequestDuration: true,
         docExpansion: "list",
         defaultModelsExpandDepth: 2,
         defaultModelExpandDepth: 2,
-        tryItOutEnabled: true,
+        tryItOutEnabled: false,
         syntaxHighlight: {
           activate: true,
           theme: "monokai"

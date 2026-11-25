@@ -6,7 +6,7 @@ Frontend. Owns the React transaction screens, navigation, public landing page, a
 
 ### A1
 
-- [ ] **Add an ADMIN manual transaction flow** · Blocked by L1 and R1 for acceptance.
+- [ ] **Add an ADMIN manual transaction flow** · Implemented. Chromium fixtures, lint and build passed. The live inline Selenium rehearsal remains pending.
 - **Goal** — Add manual entry through the existing transaction UI and cookie-authenticated API client. Show acknowledgement and pending states while the backend is processing. Render the persisted score, explanation, model version, and masked account from the detail API when available. Use a bounded refresh or explicit retry, and keep the transaction ID available after reload.
 - **Files** — `frontend/src/pages/Transactions.jsx`, `frontend/src/components/PageState.jsx`, `frontend/src/services/api.js` if needed, and `tests/selenium/test_fraudlens_e2e.py` for the new local browser case.
 - **Dependencies** — Riya [R1](riya.md#r1) and Lead [L1](lead.md#l1) provide pending/scored readback. Shivansh [S1](shivansh.md#s1) confirms the role boundary. Lead [L2](lead.md#l2) runs the real-ML rehearsal.
@@ -15,7 +15,7 @@ Frontend. Owns the React transaction screens, navigation, public landing page, a
 
 ### A2
 
-- [ ] **Show the actual alert connection state** · Unverified. The false status is visible in source and the browser acceptance check is pending.
+- [ ] **Show the actual alert connection state** · Implemented and verified in Chromium fixtures and authenticated socket integration. The complete Selenium suite remains pending.
 - **Goal** — Report socket connection, successful HTTP refresh, and unavailable states accurately. A role without alert polling permission stays unavailable when the socket is down. Keep alerts tied to actual received or persisted alert data.
 - **Files** — `frontend/src/hooks/useAlertSocket.js`, `frontend/src/layouts/DashboardLayout.jsx`, and `tests/selenium/test_fraudlens_e2e.py` for the new status checks.
 - **Dependencies** — Shivansh [S1](shivansh.md#s1) confirms role permissions and Lead [L2](lead.md#l2) supplies a real local high-risk event for rehearsal.
@@ -26,7 +26,7 @@ Frontend. Owns the React transaction screens, navigation, public landing page, a
 
 ### A3
 
-- [ ] **Align visitor-facing claims with the demonstrated mode** · Blocked by L2 for final copy verification.
+- [ ] **Align visitor-facing claims with the demonstrated mode** · Copy updated to describe the configured mode and fixture evidence. Final release rehearsal remains pending.
 - **Goal** — Describe the mode actually exercised for the demo. Describe Kafka/Spark as the streaming architecture where relevant, and label synthetic demo data. Verify dashboard status and monitoring copy against the source of each displayed value.
 - **Files** — `frontend/src/pages/LandingPage.jsx`, `frontend/src/pages/Dashboard.jsx`, and `docs/demo-script.md` jointly with Lead if wording needs synchronization.
 - **Dependencies** — Lead [L2](lead.md#l2) provides evidence for the local inline mode. Cite [L4](lead.md#l4) before presenting streaming as demonstrated.

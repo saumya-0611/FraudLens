@@ -1,5 +1,26 @@
 # FraudLens Phase 2b status
 
+## Integrated workspace checks, 25 November 2026 IST
+
+This update applies to the workspace integration based on `ed73a51`. The baseline notes below record the defects that prompted the work.
+
+| Task | Current acceptance evidence |
+|---|---|
+| L1, R1, R2 | Passed. The disposable PostgreSQL inline lifecycle check observed a durable pending row with null probability during ML failure, a later score after restart, and one transaction, score, alert and audit for concurrent intake and replay. Focused scorer, worker, producer and route tests passed. |
+| L3 | Passed. Streaming rejects malformed and mixed-version responses. Streaming and feature tests passed. Disposable PostgreSQL verification preserved the event across an unacknowledged publication and delivered it once acknowledged. |
+| L4 | Passed separately in Spark Structured Streaming and the Python fallback. Each disposable Kafka, FastAPI and PostgreSQL run preserved the first payload on replay, persisted one masked result and one audited alert, and delivered an authenticated socket event. Both used a synthetic-trained fixture. |
+| A1, A2 | Implemented. Frontend lint/build and 11 Chromium fixture scenarios passed, including pending and unconfirmed transaction flows, polling recovery and VIEWER restrictions. The inline API check and Kafka fallback independently verified authenticated alert delivery. The complete Selenium run against a live inline model remains pending. |
+| A3, L2 | Landing and dashboard copy reflects configured or unknown mode. A separately built inline Compose stack passed real FastAPI prediction, persisted readback, audit and authenticated WebSocket delivery with a synthetic-trained fixture. The PostgreSQL lifecycle check covered outage and restart. Full browser rehearsal against the selected release artifact remains pending. |
+| S1 | Passed. The disposable inline check covered unauthenticated and disallowed writes, permitted admin and service intake, analyst review, a conflicting alert decision, and masked readback and socket data. |
+| S2, S4 | Local OIDC fixtures passed. Applying the Google and LinkedIn schema on disposable PostgreSQL preserved all three seed accounts and made the schema readiness check pass. Credentialed provider acceptance remains pending. GitHub sign-in stays a separate rollout. |
+| S3 | Passed. Streaming requires explicit DB and ML configuration. The verification scripts require loopback targets and operate read-only. The negative configuration fixtures and positive disposable PostgreSQL proof passed. |
+
+Evidence entry points: [inline lifecycle](../tests/integration/inline-lifecycle.cjs), [Compose scoring smoke](../tests/integration/compose-scoring.cjs), [CI matrix](../.github/workflows/ci.yml), and [browser checks](../tests/selenium/test_fraudlens_e2e.py).
+
+All 258 Jest tests, 11 OIDC pretests, 50 Python tests, three proof-script fixtures, and frontend lint/build passed. Compose configuration checks passed for development, CI and production syntax. Production validation still requires the real deployment environment.
+
+## Baseline
+
 Baseline `8aae93cc9c75435633280181f75db5ca334247b9` on `main`, checked 24 November 2026 IST. Locally recorded `origin/main` and `origin/dev` matched `HEAD`. Those references were read locally. The four dated owner plans in `tasks/` provide historical context. This board and the linked owner files track Phase 2b.
 
 The evidence below covers the available Phase 0 checkout checks and Phase 1 direction checks against repository source. The live site, hosted settings, and real inference in both modes remain **unverified**. Runtime rehearsals use synthetic data on an approved disposable environment.
@@ -16,7 +37,7 @@ The evidence below covers the available Phase 0 checkout checks and Phase 1 dire
 | Frontend and hosted mode | Lint/build verified. Behavior inspected in source | The transaction screen reads lists and detail, and can display a persisted score or unscored result. The viewer alert fallback can display `Live` with no alert transport. The landing page describes Kafka/streaming and the checked-in Render blueprint selects inline. [Transaction screen](../frontend/src/pages/Transactions.jsx#L23) · [Alert fallback](../frontend/src/hooks/useAlertSocket.js#L42) · [Landing page](../frontend/src/pages/LandingPage.jsx#L5) · [Render config](../render.yaml#L56) |
 | Auth and role boundaries | Targeted fixtures passed. Credentialed runs unverified | Password sessions use `fl_token`. Source has Google and LinkedIn OIDC, browser-bound state and nonce, Google S256, and local VIEWER registration. The saved provider evidence identifies disposable SQL approval and real-provider tests as pending. [Cookie](../backend/src/auth/session.js#L4) · [OIDC](../backend/src/auth/oidc.js#L3) · [Provider evidence](../security/social-oauth.md#L77) |
 
-## Task board
+## Baseline task board
 
 | Task | Owner | Priority | Status | Blocker or outstanding acceptance evidence |
 | --- | --- | --- | --- | --- |

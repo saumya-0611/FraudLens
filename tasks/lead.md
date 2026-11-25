@@ -6,7 +6,7 @@ AI/ML, DevOps, and big data. Owns the FastAPI inference path, pipeline modes, Ka
 
 ### L1
 
-- [ ] **Keep inline transactions unscored when ML fails** · Unverified. The baseline fails the intended behavior in three mocked cases.
+- [x] **Keep inline transactions unscored when ML fails** · Passed the scorer and worker regressions and the disposable PostgreSQL lifecycle check on 25 November 2026.
 - **Goal** — Persist an accepted synthetic transaction so it can be read as `PENDING`, with no `fraud_results` or alert until a validated ML response is available. Validate response shape, matching transaction ID, model version, numeric probability and anomaly score, boolean anomaly flag, and explanations against the prediction contract. Preserve feature history semantics when storing the pending row.
 - **Files** — `backend/src/pipeline/inlineScorer.js`, `backend/src/tests/producer.test.js`, and planned `backend/src/tests/inlineScorer.test.js`.
 - **Dependencies** — Agree the pending-row behavior and write handoff with Riya. Amrita [A1](amrita.md#a1) uses that API behavior. See the contract decisions on the [master board](STATUS.md#contract-decisions).
@@ -15,7 +15,7 @@ AI/ML, DevOps, and big data. Owns the FastAPI inference path, pipeline modes, Ka
 
 ### L2
 
-- [ ] **Prove the local inline demo end to end** · Blocked by runtime approval, L1, R1, R2, A1, and S1.
+- [ ] **Prove the local inline demo end to end** · Inline passed real FastAPI, PostgreSQL, audit and WebSocket checks in disposable Compose, plus an outage and restart fixture. Full browser rehearsal with the selected release artifact remains pending.
 - **Goal** — Rehearse the minimum demonstrable inline path on a disposable local stack with real FastAPI model artifacts, local PostgreSQL, and the frontend with mocks disabled. Record the exact startup command, configured mode, and observable results.
 - **Files** — `docker-compose.yml` and `render.yaml` for launch context, `docs/demo-script.md`, and `tests/selenium/test_fraudlens_e2e.py` for the local demo test. Adjust runtime config only where the local rehearsal requires it.
 - **Dependencies** — Riya [R1](riya.md#r1) and [R2](riya.md#r2), Amrita [A1](amrita.md#a1), Shivansh [S1](shivansh.md#s1), and owner approval before starting containers. Run the S1 role check as an earlier step in the same approved local environment if useful.
@@ -26,7 +26,7 @@ AI/ML, DevOps, and big data. Owns the FastAPI inference path, pipeline modes, Ka
 
 ### L3
 
-- [ ] **Reject invalid predictions in the streaming batch** · Unverified. A fixture reproduced acceptance of a missing model version.
+- [x] **Reject invalid predictions in the streaming batch** · Passed streaming regression tests and a disposable PostgreSQL check on 25 November 2026.
 - **Goal** — Validate streaming ML responses against the same prediction contract before applying scores. Reject missing, duplicate, unexpected, or invalid prediction IDs and fabricated fields. Keep each persisted model version tied to its prediction, or fail a mixed-version batch before writes. Preserve the retriable failure behavior.
 - **Files** — `streaming/jobs/pipeline.py` and `streaming/tests/test_pipeline.py`.
 - **Dependencies** — Use the validation rules agreed in [L1](#l1). Riya reviews decision thresholds and Shivansh [S3](shivansh.md#s3) coordinates ML request configuration.
@@ -35,7 +35,7 @@ AI/ML, DevOps, and big data. Owns the FastAPI inference path, pipeline modes, Ka
 
 ### L4
 
-- [ ] **Prove full Kafka/Spark mode separately** · Blocked by L3 and runtime approval.
+- [x] **Prove full Kafka/Spark mode separately** · Spark and the Python fallback independently passed against disposable Kafka, PostgreSQL, and a real FastAPI predictor with a synthetic-trained model on 25 November 2026.
 - **Goal** — Rehearse backend-to-Kafka-to-Spark-to-ML-to-PostgreSQL and the alert consumer using a separate disposable local environment. Observe which worker actually processes the events.
 - **Files** — `docker-compose.yml`, `streaming/jobs/main_stream.py` and `backend/src/kafka/alertConsumer.js` if diagnosis identifies a defect, and `docs/demo-script.md` for evidence.
 - **Dependencies** — Complete [L3](#l3). Riya provides retry assertions. Shivansh supplies the approved role and masking checks. Obtain owner approval before starting containers.

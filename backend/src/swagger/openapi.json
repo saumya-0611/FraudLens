@@ -3,7 +3,7 @@
   "info": {
     "title": "FraudLens Real-Time Financial Fraud Detection API",
     "version": "1.0.0",
-    "description": "### Real-Time Financial Fraud Detection & Explainable AI Gateway\n\nFraudLens is an enterprise fraud detection and risk triage platform for digital banking and payment networks. It evaluates credit card transactions in under **150 milliseconds**, combines supervised machine learning with unsupervised anomaly detection, and provides explainable factor attribution.\n\n---\n\n### ⚡ 3-Tier Hybrid Risk Classification Engine\n\n```\nIncoming Transaction (<=150ms)\n  │\n  ├──> 1. XGBoost Classifier (Supervised, trained on historical fraud vectors)\n  └──> 2. Isolation Forest (Unsupervised, catches zero-day anomalous patterns)\n         │\n         ▼\n     Decision Matrix:\n     • HIGH_RISK   (fraud_probability >= 0.70) ──> Alert #ID created, WebSockets broadcast\n     • SUSPICIOUS  (is_anomaly = true)         ──> Step-up authentication / OTP required\n     • LEGITIMATE  (fraud_probability < 0.50)  ──> Instant silent approval\n```\n\n---\n\n### 🔒 Tamper-Proof Cryptographic Audit Ledger\nAll alert state changes and admin actions are recorded in an immutable ledger using **SHA-256 hash chaining** serialized by `pg_advisory_xact_lock(42)`:\n`entry_hash = SHA256(prev_hash + user_id + action + entity_id + details + timestamp)`\nAny direct modification to historical database rows breaks the chain and triggers tamper detection.\n\n---\n\n### 🚀 Quick Testing Guide (Interactive Sandbox)\n1. **Authenticate**: Open `POST /api/auth/login`, click **Try it out**, and send credentials (`admin` / `FlAdmin#2026!Secure`). The backend sets the `fl_token` httpOnly cookie.\n2. **Inspect Dashboard KPIs**: Call `GET /api/dashboard/summary` to view real-time transaction counts, fraud rates, and p95 latencies.\n3. **Triage Alerts**: Call `GET /api/alerts` to view pending alerts. Expand an alert and call `PATCH /api/alerts/{id}` with `{\"state\": \"RESOLVED\", \"resolution\": \"CONFIRMED_FRAUD\"}`.\n4. **Verify Audit Trail**: Call `GET /api/audit-logs` to inspect the newly created cryptographic hash chain entry.\n5. **Ingest Transactions**: Test `POST /api/transactions` with header `X-Service-Token: fl_service_token_simulator_2026`.",
+    "description": "FraudLens ingests transactions and reports fraud scores from XGBoost and Isolation Forest. With the current shared thresholds, a probability of at least 0.80, or a probability of at least 0.40 plus an anomaly, is HIGH_RISK. A probability of at least 0.40 or an anomaly otherwise is SUSPICIOUS. Other scored transactions are LEGITIMATE. Unscored transactions are PENDING. The audit log uses a SHA-256 hash chain for tamper evidence. Use an explicitly provisioned account for password sign-in or a configured service token for headless ingestion.",
     "contact": {
       "name": "FraudLens Engineering (Team 34)",
       "url": "https://github.com/saumya-0611/FraudLens"
@@ -14,18 +14,7 @@
     }
   },
   "servers": [
-    {
-      "url": "https://fraudlens-backend-j17p.onrender.com",
-      "description": "Production Cloud Gateway (Render Web Service + Neon PostgreSQL 18)"
-    },
-    {
-      "url": "http://localhost:5000",
-      "description": "Local Development (Node.js Express API)"
-    },
-    {
-      "url": "https://localhost:8443",
-      "description": "Local Secure Docker Nginx Gateway"
-    }
+    { "url": "/", "description": "Current deployment" }
   ],
   "tags": [
     { "name": "System & Health", "description": "Liveness probes, service heartbeats, and API root status." },
@@ -158,7 +147,7 @@
                 "required": ["username", "password"],
                 "properties": {
                   "username": { "type": "string", "example": "admin" },
-                  "password": { "type": "string", "example": "FlAdmin#2026!Secure" }
+                  "password": { "type": "string", "format": "password" }
                 }
               }
             }
@@ -232,7 +221,7 @@
       "post": {
         "tags": ["Transactions"],
         "summary": "Ingest transaction for real-time fraud scoring",
-        "description": "Ingests a financial transaction. In `PIPELINE_MODE=inline`, immediately computes the 13 streaming CONTRACTS features, invokes the ML service, evaluates hybrid thresholds, and logs high-risk alerts within 150ms.",
+        "description": "Accepts an intake request. Inline mode stores the transaction and its scoring job, and Kafka mode acknowledges broker publication. Read the transaction endpoint to confirm a persisted prediction.",
         "security": [{ "serviceToken": [] }, { "cookieAuth": [] }],
         "requestBody": {
           "required": true,
@@ -244,7 +233,7 @@
         },
         "responses": {
           "202": {
-            "description": "Accepted and scored successfully",
+            "description": "Accepted for scoring",
             "content": {
               "application/json": {
                 "example": {
@@ -549,8 +538,8 @@
                       "id": 1,
                       "event_time": "2026-11-24T12:05:00.000Z",
                       "username": "admin",
-                      "action": "ALERT_RESOLVED",
-                      "entity": "ALERT",
+                      "action": "ALERT_STATE_CHANGED",
+                      "entity": "alert",
                       "entity_id": "1",
                       "details": { "resolution": "CONFIRMED_FRAUD" },
                       "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -566,6 +555,71 @@
       }
     },
     "/api/users": {
+      "post": {
+        "tags": [
+          "User Administration"
+        ],
+        "summary": "Create an account (ADMIN)",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_.-]{3,50}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 10,
+                    "maxLength": 72,
+                    "description": "Limited to 72 UTF-8 bytes."
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ANALYST",
+                      "VIEWER"
+                    ]
+                  }
+                },
+                "required": [
+                  "username",
+                  "password",
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created user"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "Administrator required"
+          },
+          "409": {
+            "description": "Username already exists"
+          }
+        }
+      },
       "get": {
         "tags": ["User Administration"],
         "summary": "List platform users with assigned roles (ADMIN)",
@@ -575,16 +629,284 @@
             "description": "List of user accounts",
             "content": {
               "application/json": {
-                "example": [
+                "example": { "items": [
                   { "id": 1, "username": "admin", "role": "ADMIN", "status": "ACTIVE" },
                   { "id": 2, "username": "analyst", "role": "ANALYST", "status": "ACTIVE" },
                   { "id": 3, "username": "viewer", "role": "VIEWER", "status": "ACTIVE" }
-                ]
+                ] }
               }
             }
           }
         }
       }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "System & Health"
+        ],
+        "summary": "Check pipeline readiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Required services are ready"
+          },
+          "503": {
+            "description": "One or more required services are unavailable"
+          }
+        }
+      }
+    },
+    "/api/auth/providers": {
+      "get": {
+        "tags": [
+          "Auth & Sessions"
+        ],
+        "summary": "List configured and ready social sign-in providers",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Google and LinkedIn availability flags"
+          }
+        }
+      }
+    },
+    "/api/auth/{provider}/start": {
+      "get": {
+        "tags": [
+          "Auth & Sessions"
+        ],
+        "summary": "Begin social sign-in",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "linkedin"
+              ]
+            }
+          }
+        ],
+        "security": [],
+        "responses": {
+          "303": {
+            "description": "Provider login or safe error redirect"
+          }
+        }
+      }
+    },
+    "/api/auth/{provider}/link": {
+      "post": {
+        "tags": [
+          "Auth & Sessions"
+        ],
+        "summary": "Begin linking a provider to the current account",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "linkedin"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Provider login or safe error redirect"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "FraudLens origin required"
+          }
+        }
+      }
+    },
+    "/api/auth/{provider}/callback": {
+      "get": {
+        "tags": [
+          "Auth & Sessions"
+        ],
+        "summary": "Complete the browser-bound provider flow",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "linkedin"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [],
+        "responses": {
+          "303": {
+            "description": "Dashboard or safe error redirect"
+          }
+        }
+      }
+    },
+    "/api/models/retrain": {
+      "post": {
+        "tags": [
+          "MLOps & Drift Governance"
+        ],
+        "summary": "Train and validate a candidate model (ADMIN)",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Candidate result from the model service"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "Administrator required"
+          },
+          "503": {
+            "description": "Model service unavailable"
+          },
+          "504": {
+            "description": "Model service timed out"
+          }
+        }
+      }
+    },
+    "/api/users/{id}": {
+      "patch": {
+        "tags": [
+          "User Administration"
+        ],
+        "summary": "Update account role, status or password (ADMIN)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "ADMIN",
+                      "ANALYST",
+                      "VIEWER"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACTIVE",
+                      "DISABLED"
+                    ]
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 10,
+                    "maxLength": 72,
+                    "description": "Limited to 72 UTF-8 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated user"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "Administrator required"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "409": {
+            "description": "Self-demotion or self-disable blocked"
+          }
+        }
+      }
     }
+  },
+  "x-websocket": {
+    "path": "/ws/alerts",
+    "authentication": "fl_token cookie and an allowed Origin",
+    "messages": ["READY", "NEW_ALERT"]
   }
 }

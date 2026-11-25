@@ -6,7 +6,7 @@ Cyber security. Owns authentication, role enforcement, OAuth readiness, and secu
 
 ### S1
 
-- [ ] **Verify transaction and alert access for the demo roles** · Unverified. Targeted access fixtures passed and the authenticated runtime matrix is pending.
+- [x] **Verify transaction and alert access for the demo roles** · Passed the disposable PostgreSQL role matrix and authenticated alert checks on 25 November 2026.
 - **Goal** — Verify existing cookie and service-ingestion boundaries for the new UI flow. Keep POST limited to ADMIN or the configured service identity, keep alert REST operations limited to ADMIN and ANALYST, and verify permitted users receive masked data on transaction reads and authenticated alert events.
 - **Files** — `backend/src/middleware/serviceAuth.js`, `backend/src/routes/alerts.routes.js`, `backend/src/websocket/alertSocket.js` if a regression is found, and `backend/src/tests/protectedRoutes.test.js`, `backend/src/tests/alerts.test.js`, `backend/src/tests/alertSocket.test.js` for coverage.
 - **Dependencies** — Riya [R1](riya.md#r1) supplies readback cases. Coordinate actual role checks with Amrita [A1](amrita.md#a1) and Lead [L2](lead.md#l2) without waiting for the full demo rehearsal.
@@ -17,7 +17,7 @@ Cyber security. Owns authentication, role enforcement, OAuth readiness, and secu
 
 ### S2
 
-- [ ] **Validate readiness of the existing social sign-in** · Blocked by approval to apply the OAuth SQL to a disposable database and use a provider test application.
+- [ ] **Validate readiness of the existing social sign-in** · The schema migration and local OIDC fixtures passed. Approved provider applications and credentialed staging checks are still needed.
 - **Goal** — Verify Google and, if approved for the demo, LinkedIn on the existing flow. Confirm provider availability reflects configuration and schema readiness. Keep password login usable and preserve local role authority.
 - **Files** — `security/social-oauth.md`, `database/proposals/social-oauth.sql` for review, `backend/src/tests/oauthRoutes.test.js`, and `backend/src/tests/oauthStore.test.js` if additional coverage is needed.
 - **Dependencies** — Lead supplies a disposable database and approved callback origin. Amrita verifies the sign-in buttons reflect `/api/auth/providers`. The project owner configures the approved provider test application.
@@ -26,7 +26,7 @@ Cyber security. Owns authentication, role enforcement, OAuth readiness, and secu
 
 ### S3
 
-- [ ] **Require explicit credentials in deployment and proof scripts** · Unverified. Runtime and script defaults were found in source.
+- [x] **Require explicit credentials in deployment and proof scripts** · Passed validation fixtures, a read-only disposable PostgreSQL check, and both explicitly configured Kafka runtimes on 25 November 2026.
 - **Goal** — Require explicitly configured credentials for the named runtime and proof paths, with clear safe failure on missing configuration. Make live-check scripts refuse a non-approved target. Coordinate the names and defaults with Lead before changing the launch path.
 - **Files** — `streaming/jobs/pipeline.py`, `scripts/test_app_live.js`, `scripts/verify_neon_e2e.js`, and `deploy/CLOUD_DEPLOYMENT.md` if the operator instructions need updating.
 - **Dependencies** — Lead [L3](lead.md#l3) owns the streaming ML request changes. Coordinate edits to the same function with Lead.
