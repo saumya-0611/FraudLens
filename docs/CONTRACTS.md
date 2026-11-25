@@ -77,7 +77,7 @@ CREATE TABLE users (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Written ONLY by streaming (Spark/pipeline). Backend only publishes to Kafka.
+-- Streaming writes these rows in Kafka mode. The backend writes them in inline mode.
 CREATE TABLE transactions (
   transaction_id   VARCHAR(64) PRIMARY KEY,
   account_ref      VARCHAR(64) NOT NULL,
@@ -168,8 +168,11 @@ CREATE TABLE service_heartbeats (
 Audit hash chain: `entry_hash = SHA256(prev_hash + event_time_iso + username + action + entity + entity_id + JSON(details))`.
 First row uses `prev_hash = 64 zeros`. Insert inside a transaction holding `pg_advisory_xact_lock(42)` so the chain never forks.
 
-Writers: **transactions / fraud_results / alerts / service_heartbeats = streaming only** (idempotent: `ON CONFLICT DO NOTHING`).
-**users / audit_logs = backend only. model_versions / drift_reports = ml-service only.** Alert state changes (`PATCH`) = backend.
+**Kafka mode.** The backend publishes ingestion to Kafka. The worker owns transaction, score, alert creation, and its service heartbeat. The worker commits the score and any alert with an `alert_outbox` row. It deletes the outbox entry after Kafka acknowledges publication. Delivery can repeat after an interrupted acknowledgment. The backend deduplicates the alert audit by alert ID.
+
+**Inline mode.** The backend stores the intake and an `inline_scoring_jobs` row before acknowledgment. Workers claim due jobs with expiring leases and retry failed attempts with backoff. The accepted payload stays authoritative on replay. The backend commits the score, any alert, and its audit entry in a single transaction.
+
+**Both modes.** The backend owns users, audit logs, and alert state changes. The ML service owns model versions and drift reports. Exactly one score can be committed per transaction ID. The first accepted payload supplies the scoring features. For history, select up to 50 prior events for the same account in descending event time and transaction ID order, using ascending ID as the tie-break within a timestamp.
 
 ---
 
@@ -253,7 +256,7 @@ stored in `data-science/datasets/` (git-ignored). Mapping from CSV to our names 
 
 ## 6. ML service API (FastAPI, internal only)
 
-All endpoints except `/health` require header `X-Internal-Token: <INTERNAL_ML_TOKEN>` (else 401).
+Inference and model operations require `X-Internal-Token: <INTERNAL_ML_TOKEN>` (else 401). The root metadata route and health probes are public. Readiness verifies the supplied token when called by the backend.
 
 `POST /predict`
 
@@ -272,7 +275,8 @@ All endpoints except `/health` require header `X-Internal-Token: <INTERNAL_ML_TO
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | `{"status":"ok","model_version":"v1"}` (no token needed) |
+| GET, HEAD | `/health` | Liveness, including the current predictor version |
+| GET, HEAD | `/ready` | 200 when a verified model is loaded and internal authentication is configured, otherwise 503 |
 | GET | `/models` | list of `model_versions` rows + `active_version` + latest drift report |
 | POST | `/drift/check` | compute PSI on last N (default 1000) scored rows vs training reference; store in `drift_reports`; return report |
 | POST | `/retrain` | train candidate; evaluate on holdout; status `VALIDATED` if PR-AUC >= 0.95 x active PR-AUC else `REJECTED`; return `{version, status, metrics}` |
@@ -313,9 +317,14 @@ Paging: `?page=1&page_size=20` -> `{ "items": [...], "page": 1, "page_size": 20,
 | Method | Path | Roles | Body / query | Success response |
 |---|---|---|---|---|
 | GET | `/health` (no `/api` prefix) | public | | `{"status":"ok"}` |
+| GET | `/ready` (no `/api` prefix) | public | | 200 when PostgreSQL, authenticated ML readiness, and any required Kafka connections are available, otherwise 503 |
 | POST | `/api/auth/login` | public | `{username,password}` | 200 `{username,role,expires_in}` + cookie |
 | POST | `/api/auth/logout` | any | | 204, clears cookie |
 | GET | `/api/auth/me` | any | | `{username,role}` |
+| GET | `/api/auth/providers` | public | | Google and LinkedIn availability flags |
+| GET | `/api/auth/:provider/start` | public | | 303 to the provider or safe error page |
+| GET | `/api/auth/:provider/callback` | public browser callback | `state, code, error, iss` | 303 to dashboard or safe error page |
+| POST | `/api/auth/:provider/link` | any session, same origin | | 303 to the provider or safe error page |
 | POST | `/api/transactions` | ADMIN or header `X-Service-Token` | transaction object (§4 without `ingested_at`) | **202** `{transaction_id,status:"ACCEPTED"}` |
 | GET | `/api/transactions` | any | `risk, from, to, q, page, page_size` | paged items (below) |
 | GET | `/api/transactions/:id` | any | | item + `top_reasons`, `features`, timestamps, `alert` |
@@ -331,7 +340,7 @@ Paging: `?page=1&page_size=20` -> `{ "items": [...], "page": 1, "page_size": 20,
 | POST | `/api/models/drift-check` | ADMIN | | proxies `/drift/check` |
 | POST | `/api/models/retrain` | ADMIN | | **202** proxies `/retrain` |
 | POST | `/api/models/:version/activate` | ADMIN | | proxies activate |
-| WS | `/ws/alerts` | any logged-in | | server pushes `{"type":"NEW_ALERT","alert":{...fraud-alerts message...}}` |
+| WS | `/ws/alerts` | any logged-in, allowed Origin | | server sends `{"type":"READY"}` after session validation, then pushes `{"type":"NEW_ALERT","alert":{...fraud-alerts message...}}` |
 
 Transaction list item:
 
@@ -340,7 +349,7 @@ Transaction list item:
   "tx_time": "2026-11-20T03:12:45Z", "risk_category": "HIGH_RISK", "fraud_probability": 0.93, "is_anomaly": true,
   "model_version": "v1", "alert": { "alert_id": 17, "state": "NEW", "resolution": null } }
 ```
-Not yet scored -> `risk_category: "PENDING"`, probability null.
+In inline mode a `202` means PostgreSQL accepted the transaction and scoring job or the ID already exists. In Kafka mode it means the broker accepted the message. Readback can return `404` in Kafka mode while work is in transit. A stored unscored row has `risk_category: "PENDING"` and null probability, anomaly flag, and model version.
 
 Dashboard summary:
 
@@ -373,7 +382,7 @@ Skeleton ships with STUBS for these (pass-through). Shivansh replaces the implem
 | `audit/auditLogger.js` | `async audit({req, userId, username, action, entity, entityId, details})` | writes hash-chained row (§3) |
 
 Audit `action` values: `LOGIN_SUCCESS, LOGIN_FAILURE, LOGOUT, USER_CREATED, USER_UPDATED, ALERT_RAISED, ALERT_STATE_CHANGED, MODEL_DRIFT_CHECK, MODEL_RETRAIN, MODEL_ACTIVATED, ACCESS_DENIED`.
-`ALERT_RAISED` is written by the backend's alert consumer when it reads `fraud-alerts` (so the backend stays the only audit writer).
+`ALERT_RAISED` is written by the backend when it consumes `fraud-alerts` in Kafka mode or when it commits the inline score and alert in inline mode.
 Per-transaction decisions are traceable through `fraud_results` (transaction id + model version) and are not duplicated in the audit log.
 
 Route files (Riya): `routes/transactions.routes.js, alerts.routes.js, dashboard.routes.js, models.routes.js`.

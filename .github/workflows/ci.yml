@@ -61,15 +61,86 @@ jobs:
             echo "frontend/package.json not merged yet; skipping build."
           fi
 
-  docker-preflight:
-    name: Docker Compose Pre-Flight Build
+  inline-lifecycle:
+    name: Inline Scoring With Disposable PostgreSQL
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fraudlens_fixture
+          POSTGRES_PASSWORD: ci-fixture-only
+          POSTGRES_DB: fraudlens_fixture
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U fraudlens_fixture -d fraudlens_fixture"
+          --health-interval 2s --health-timeout 4s --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare .env and validate compose config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm --prefix backend ci
+      - run: node tests/integration/inline-lifecycle.cjs
+        env:
+          FRAUDLENS_TEST_DATABASE_URL: postgres://fraudlens_fixture:ci-fixture-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/fraudlens_fixture
+
+  docker-preflight:
+    name: Real Model Scoring With ${{ matrix.runtime }}
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_ENV_FILES: .env.ci
+      FRAUDLENS_ENV_FILE: .env.ci
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [inline, spark, fallback]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare disposable Compose credentials
+        env:
+          RUNTIME: ${{ matrix.runtime }}
         run: |
-          cp .env.example .env
+          if [ "$RUNTIME" = inline ]; then
+            PIPELINE_MODE=inline sh scripts/prepare_ci_env.sh
+          else
+            STREAM_ENGINE="$RUNTIME" sh scripts/prepare_ci_env.sh
+          fi
           docker compose config --quiet
-      - name: Build backend, ml-service, and streaming images
+      - name: Start runtime and wait for dependency readiness
+        env:
+          RUNTIME: ${{ matrix.runtime }}
         run: |
-          docker compose build ml-service backend streaming
+          if [ "$RUNTIME" = inline ]; then
+            docker compose up --build --wait --wait-timeout 180 backend
+          else
+            docker compose up --build --wait --wait-timeout 180 backend streaming
+          fi
+      - name: Exercise authenticated scoring and alert delivery
+        env:
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          docker compose exec -T backend npm run seed
+          docker compose exec -T -e FRAUDLENS_COMPOSE_SMOKE=1 backend node - < tests/integration/compose-scoring.cjs
+          if [ "$RUNTIME" = inline ]; then
+            exit 0
+          fi
+          logs=$(docker compose logs --no-color streaming)
+          if [ "$RUNTIME" = spark ]; then
+            grep -Fq 'PySpark Structured Streaming started' <<< "$logs"
+            if grep -Fq 'falling back to Python Kafka consumer' <<< "$logs"; then
+              echo 'The Spark runtime fell back to the Python consumer.'
+              exit 1
+            fi
+          else
+            grep -Fq 'Connected to Kafka' <<< "$logs"
+          fi
+      - name: Collect service diagnostics
+        if: failure()
+        run: docker compose logs --no-color backend ml-service streaming
+      - name: Remove disposable stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans

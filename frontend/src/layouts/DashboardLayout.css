@@ -1,4 +1,4 @@
-.dashboard-shell { min-height:100vh; display:flex; color:var(--text-primary); background:var(--bg-main); }
+.dashboard-shell { min-height:100vh; display:flex; overflow-x:clip; color:var(--text-primary); background:var(--bg-main); }
 .sidebar { width:260px; min-width:260px; min-height:100vh; display:flex; flex-direction:column; padding:26px 18px 18px; background:var(--bg-surface); border-right:1px solid var(--border-default); transition:transform .25s ease; z-index:20; }
 .sidebar-brand { display:flex; align-items:center; gap:12px; padding:0 8px; margin-bottom:48px; }
 .brand-mark { width:42px; height:42px; display:grid; place-items:center; color:var(--brand-primary); background:color-mix(in srgb,var(--brand-primary) 14%,var(--bg-main)); border:1px solid color-mix(in srgb,var(--brand-primary) 36%,var(--border-default)); border-radius:var(--radius-lg); }
@@ -21,7 +21,7 @@
 .dashboard-main { flex:1; min-width:0; }.dashboard-topbar { min-height:78px; display:flex; align-items:center; justify-content:space-between; padding:15px 34px; background:var(--bg-surface); border-bottom:1px solid var(--border-default); }
 .topbar-eyebrow { color:var(--brand-primary); font-size:9px; font-weight:700; letter-spacing:1.5px; }.dashboard-topbar p { margin:5px 0 0; color:var(--text-secondary); font-size:12px; }
 .topbar-role { padding:7px 12px; color:var(--brand-primary); background:color-mix(in srgb,var(--brand-primary) 14%,var(--bg-surface)); border:1px solid color-mix(in srgb,var(--brand-primary) 32%,var(--border-default)); border-radius:20px; font-size:10px; font-weight:700; letter-spacing:.7px; }.topbar-profile { display:flex; align-items:center; gap:14px; }
-.dashboard-content { padding:30px 34px; }
+.dashboard-content { min-width:0; max-width:100%; padding:30px 34px; }
 .mobile-menu-button { display:none; position:fixed; top:17px; right:17px; z-index:30; width:40px; height:40px; place-items:center; color:var(--text-primary); background:var(--bg-elevated); border:1px solid var(--border-default); border-radius:var(--radius-md); cursor:pointer; }
 @media(max-width:800px) { .sidebar { position:fixed; top:0; bottom:0; left:0; width:260px; transform:translateX(-100%); }.sidebar.sidebar-open { transform:translateX(0); }.mobile-menu-button { display:grid; }.dashboard-topbar { padding:15px 70px 15px 20px; }.dashboard-content { padding:22px 18px; } }
 @media(max-width:480px) { .dashboard-topbar { min-height:70px; }.dashboard-content { padding:18px 13px; }.topbar-role { font-size:9px; } }

@@ -5,6 +5,30 @@
 #   - Free sslip.io DNS:   SITE_ADDRESS=<VM_PUBLIC_IP>.sslip.io   (auto Let's Encrypt HTTPS!)
 #   - HTTP-only test:      SITE_ADDRESS=:80
 
+# Apply callback redaction to runtime logs, including reverse-proxy errors.
+{
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete code
+					delete state
+					delete session_state
+					delete error_description
+					delete access_token
+					delete id_token
+				}
+				request>headers>Referer delete
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+				request>headers>X-Service-Token delete
+				request>headers>X-Internal-Token delete
+			}
+		}
+	}
+}
+
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
 
@@ -26,7 +50,11 @@
 					delete code
 					delete state
 					delete session_state
+					delete error_description
+					delete access_token
+					delete id_token
 				}
+				request>headers>Referer delete
 				request>headers>Cookie delete
 				request>headers>Authorization delete
 				request>headers>X-Service-Token delete
@@ -45,8 +73,9 @@
 		reverse_proxy backend:5000
 	}
 
-	# Public liveness health check
-	handle /health {
+	# Public liveness and readiness checks
+	@serviceStatus path /health /ready
+	handle @serviceStatus {
 		reverse_proxy backend:5000
 	}
 

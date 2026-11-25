@@ -8,6 +8,7 @@ import {
     Users,
     ScrollText,
     BrainCircuit,
+    ScanSearch,
     LogOut,
     ShieldCheck,
     Activity,
@@ -57,6 +58,12 @@ const navigation = [
         icon: BrainCircuit,
         roles: ["ADMIN"],
     },
+    {
+        label: "Analyse Transaction",
+        path: "/analyse",
+        icon: ScanSearch,
+        roles: ["ADMIN"],
+    },
 ];
 
 function DashboardLayout() {
@@ -70,7 +77,7 @@ function DashboardLayout() {
         enabled: Boolean(user) && !mockMode,
         role: user?.role,
     });
-    const alertsLive = alertSocketStatus === "Connected" || alertSocketStatus === "Live";
+    const alertsLive = alertSocketStatus === "Live WebSocket" || alertSocketStatus === "HTTP polling";
 
     useEffect(() => {
         if (!menuOpen) return undefined;
@@ -217,7 +224,7 @@ function DashboardLayout() {
                     </div>
 
                     <div className="topbar-profile">
-                        <span className="socket-status"><i className={alertsLive ? "online" : "offline"}/>Alerts {alertSocketStatus}</span>
+                        <span className="socket-status"><i className={alertsLive ? "online" : "offline"}/>Alerts {mockMode ? "Mock mode" : alertSocketStatus}</span>
                         <span className="topbar-role">{user?.role}</span>
                     </div>
                 </header>

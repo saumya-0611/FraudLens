@@ -40,30 +40,37 @@ Backend Alert Consumer (`backend-alerts`)
 
 ---
 
-## 2. Quick Start (One-Command Docker Compose)
+## 2. Quick Start (Docker Compose)
 
 ```bash
 # 1. Create local .env from template
 cp .env.example .env
 
-# 2. Build and start all services (Postgres, Kafka + Topics, ML Service, Streaming, Backend, Frontend)
+# 2. For sign-in, set unique SEED_ADMIN_PASSWORD, SEED_ANALYST_PASSWORD and SEED_VIEWER_PASSWORD in .env.
+
+# 3. Build and start all services
 docker compose up --build -d
 
-# 3. Verify all containers are healthy
+# 4. Verify readiness and explicitly provision the initial accounts
 docker compose ps
+curl -fsS http://localhost:5000/ready
+docker compose exec backend npm run seed
 ```
 
 - **Frontend Dashboard:** `http://localhost:5173`
-- **Backend Health Check:** `http://localhost:5000/health`
+- **Backend liveness:** `http://localhost:5000/health`
+- **Backend readiness:** `http://localhost:5000/ready`
 - **Interactive Swagger UI (OpenAPI 3.0):** `http://localhost:5000/api-docs`
 
-### Default Seeded Accounts (Auto-Seeded in PostgreSQL with Bcrypt Cost 10)
+### Initial accounts
 
-| Role | Username | Default Password (`.env.example`) | Capabilities |
+The seed command creates missing accounts with bcrypt cost 10. It preserves existing accounts, including role, password, and disabled status. Each new password must be distinct, at least 12 characters, and at most 72 UTF-8 bytes.
+
+| Role | Username | Password variable | Capabilities |
 |---|---|---|---|
-| **ADMIN** | `admin` | `FlAdmin#2026!Secure` | Full access: Dashboard, Transactions, Alerts, Users, Audit Logs, Model Drift/Retrain/Activate, Ingest |
-| **ANALYST** | `analyst` | `FlAnalyst#2026!Safe` | Dashboard, Transactions (masked), Alerts investigation & resolution (`CONFIRMED_FRAUD` / `FALSE_POSITIVE`) |
-| **VIEWER** | `viewer` | `FlViewer#2026!Read` | Read-only Dashboard & Masked Transactions (`XXXX-last4`) |
+| **ADMIN** | `admin` | `SEED_ADMIN_PASSWORD` | Full access: Dashboard, Transactions, Alerts, Users, Audit Logs, Model Drift/Retrain/Activate, Ingest |
+| **ANALYST** | `analyst` | `SEED_ANALYST_PASSWORD` | Dashboard, Transactions (masked), Alerts investigation & resolution (`CONFIRMED_FRAUD` / `FALSE_POSITIVE`) |
+| **VIEWER** | `viewer` | `SEED_VIEWER_PASSWORD` | Read-only Dashboard & Masked Transactions (`XXXX-last4`) |
 
 ---
 

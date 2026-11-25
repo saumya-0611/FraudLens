@@ -26,10 +26,11 @@ async function parseResponse(response) {
 }
 
 export async function request(path, options = {}) {
+    const { expectedStatus, ...fetchOptions } = options;
     if (USE_MOCKS) {
         try {
             const { mockRequest } = await import("../mocks/mockApi");
-            return await mockRequest(path, options);
+            return await mockRequest(path, fetchOptions);
         } catch (error) {
             throw error.data?.error || createApiError(
                 "MOCK_ERROR",
@@ -39,25 +40,25 @@ export async function request(path, options = {}) {
     }
 
     let response;
+    let data;
     try {
         response = await fetch(path, {
-            ...options,
+            ...fetchOptions,
             credentials: "include",
             headers: {
                 "Content-Type": "application/json",
-                ...options.headers,
+                ...fetchOptions.headers,
             },
         });
+        data = await parseResponse(response);
     } catch (error) {
         throw createApiError(
             "BACKEND_UNAVAILABLE",
-            error.name === "AbortError"
+            error.name === "AbortError" || error.name === "TimeoutError"
                 ? "The FraudLens request timed out. Please try again."
                 : "Cannot reach the FraudLens backend. Check the service and API proxy, then try again.",
         );
     }
-
-    const data = await parseResponse(response);
 
     if (response.status === 401) {
         const endpoint = new URL(path, window.location.origin).pathname;
@@ -79,10 +80,14 @@ export async function request(path, options = {}) {
     }
 
     if (!response.ok) {
-        throw data?.error || createApiError(
+        throw { ...(data?.error || createApiError(
             "REQUEST_FAILED",
             "The request could not be completed.",
-        );
+        )), status: response.status };
+    }
+
+    if (expectedStatus !== undefined && response.status !== expectedStatus) {
+        throw createApiError("UNEXPECTED_STATUS", "The server returned an unexpected response status.");
     }
 
     return data;

@@ -10,7 +10,7 @@
 #                          ├── /            -> compiled React SPA (/srv)
 #                          ├── /api/*       -> backend:5000 (internal only)
 #                          ├── /ws/alerts   -> backend:5000 (WSS upgrade, same origin)
-#                          ├── /health      -> backend:5000
+#                          ├── /health, /ready -> backend:5000
 #                          └── /api-docs*   -> backend:5000
 #   Internal only (zero public ports): postgres, kafka, ml-service, streaming, backend
 
@@ -70,6 +70,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        set -eu
         echo "Ensuring FraudLens Kafka topics exist..."
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions-raw --partitions 3 --replication-factor 1
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions-dlq --partitions 1 --replication-factor 1
@@ -92,7 +93,7 @@ services:
       - model_store:/app/model_store
       - ./data-science/datasets:/app/data-science/datasets:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -102,8 +103,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     env_file:
       - ${ENV_FILE:-.env.prod}
@@ -117,12 +118,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ml-service:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/ready > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -140,10 +141,12 @@ services:
     environment:
       STREAM_ENGINE: ${STREAM_ENGINE:-spark}
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       ml-service:
         condition: service_healthy
     volumes:
@@ -169,7 +172,7 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:80/health > /dev/null 2>&1 || curl -fsS http://127.0.0.1:2019/config/ > /dev/null 2>&1 || exit 0"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/"]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -39,62 +39,91 @@ function initAlertSocket(server) {
     closeAlertSocket();
   }
 
-  wss = new WebSocket.Server({
+  const socketServer = new WebSocket.Server({
     server,
     path: '/ws/alerts',
     verifyClient({ req }, done) {
       done(allowedOrigins.has(parseOrigin(req.headers.origin)), 403, 'Forbidden origin');
     },
   });
+  wss = socketServer;
 
-  wss.on('connection', (ws, req) => {
+  socketServer.on('connection', (ws, req) => {
     ws.on('error', (err) => {
       console.error('[AlertSocket] Client error:', err.message);
     });
 
     ws.sessionRequest = { headers: { cookie: req.headers.cookie } };
-    ws.sessionReady = checkSession(ws);
+    ws.sessionReady = checkSession(ws).then((user) => {
+      if (!user || ws.readyState !== WebSocket.OPEN) return null;
+      sendFrame(ws, JSON.stringify({ type: 'READY' }));
+      return user;
+    });
     ws.isAlive = true;
 
     ws.on('pong', () => {
       ws.isAlive = true;
     });
-
   });
 
   // Keep-alive heartbeat: ping every 30 seconds
   const heartbeat = setInterval(() => {
-    if (!wss) return;
-    wss.clients.forEach((ws) => {
-      if (ws.isAlive === false) {
-        return ws.terminate();
-      }
-      ws.isAlive = false;
-      try {
-        ws.ping();
-      } catch (err) {}
-    });
+    for (const ws of socketServer.clients) {
+      if (ws.isAlive === false) ws.terminate();
+      else if (!ws.heartbeatPending && ws.readyState === WebSocket.OPEN) void validateAndPing(ws);
+    }
   }, 30000);
   heartbeat.unref();
   pingInterval = heartbeat;
 
-  wss.on('close', () => {
+  socketServer.on('close', () => {
     clearInterval(heartbeat);
     if (pingInterval === heartbeat) pingInterval = null;
   });
 
-  return wss;
+  return socketServer;
+}
+
+function sendFrame(ws, frame) {
+  ws.send(frame, (error) => {
+    if (error) console.error('[AlertSocket] Client send failed:', error.message);
+  });
+}
+
+async function validateAndPing(ws) {
+  ws.heartbeatPending = true;
+  try {
+    if (await ws.sessionReady && await checkSession(ws) && ws.readyState === WebSocket.OPEN) {
+      ws.isAlive = false;
+      ws.ping();
+    }
+  } catch (error) {
+    console.error('[AlertSocket] Heartbeat failed:', error.message);
+    ws.terminate();
+  } finally {
+    ws.heartbeatPending = false;
+  }
 }
 
 async function checkSession(ws) {
   try {
-    if (await getSessionUser(ws.sessionRequest)) return true;
-    ws.close(4401, 'Unauthorized');
+    const user = await getSessionUser(ws.sessionRequest);
+    if (!user) {
+      ws.close(4401, 'Unauthorized');
+      return null;
+    }
+    if (ws.authenticatedUser &&
+        (String(ws.authenticatedUser.id) !== String(user.id) || ws.authenticatedUser.role !== user.role)) {
+      ws.close(4403, 'Session changed');
+      return null;
+    }
+    ws.authenticatedUser = user;
+    return user;
   } catch (error) {
     console.error('[AlertSocket] Session check failed:', error.message);
     ws.close(1011, 'Session check failed');
   }
-  return false;
+  return null;
 }
 
 /**
@@ -114,7 +143,7 @@ async function broadcastAlert(alert) {
     if (await client.sessionReady && client.readyState === WebSocket.OPEN &&
         await checkSession(client) && client.readyState === WebSocket.OPEN) {
       try {
-        client.send(payload);
+        sendFrame(client, payload);
       } catch (err) {
         console.error('[AlertSocket] Broadcast error to client:', err.message);
       }

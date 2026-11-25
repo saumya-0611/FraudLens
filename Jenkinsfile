@@ -8,6 +8,8 @@ pipeline {
     environment {
         COMPOSE_PROJECT_NAME = "fraudlens-ci"
         COMPOSE_FILE         = "docker-compose.yml:docker-compose.ci.yml"
+        COMPOSE_ENV_FILES    = ".env.ci"
+        FRAUDLENS_ENV_FILE   = ".env.ci"
     }
 
     stages {
@@ -27,9 +29,8 @@ pipeline {
         stage('Prepare Environment') {
             steps {
                 sh '''
-                    cp .env.example .env
-                    echo "FRONTEND_HOST_PORT=6173" >> .env
-                    echo "BACKEND_HOST_PORT=6000"  >> .env
+                    sh scripts/prepare_ci_env.sh
+                    docker compose config --quiet
                 '''
             }
         }
@@ -43,18 +44,13 @@ pipeline {
         stage('Test & Run Pre-Flight Stack') {
             steps {
                 sh '''
-                    docker compose up -d postgres kafka kafka-init ml-service backend streaming frontend || docker-compose up -d
-                    sleep 15
-                    docker compose ps || docker-compose ps
-                    RUNNING=$( (docker compose ps --services --filter "status=running" 2>/dev/null || docker-compose ps --services --filter "status=running") | wc -l )
-                    if [ "$RUNNING" -lt 4 ]; then
-                        echo "Not all core containers are running"
-                        docker compose logs || docker-compose logs
-                        exit 1
-                    fi
+                    docker compose up --wait --wait-timeout 180
+                    docker compose ps
+                    docker compose exec -T backend wget -qO- http://localhost:5000/ready
+                    docker compose exec -T ml-service curl -fsS http://localhost:8000/ready
                     echo "All FraudLens CI containers are up:"
-                    echo "   ml-service -> http://localhost:9000/health"
-                    echo "   backend    -> http://localhost:6000/health"
+                    echo "   ml-service -> http://localhost:9000/ready"
+                    echo "   backend    -> http://localhost:6000/ready"
                     echo "   frontend   -> http://localhost:6173"
                 '''
             }

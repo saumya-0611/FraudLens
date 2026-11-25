@@ -12,6 +12,8 @@ const { routeQuery: query } = require('../config/db');
 const { sessionCookie } = require('./fixtures/session');
 let cookie;
 const { isProducerConnected } = require('../kafka/producer');
+const env = require('../config/env');
+env.internalMlToken = 'fixture-dashboard-token';
 
 describe('Dashboard Route Tests', () => {
   beforeEach(() => {

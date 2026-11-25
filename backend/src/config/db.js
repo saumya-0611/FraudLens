@@ -4,7 +4,7 @@ const env = require('./env');
 
 const poolConfig = { connectionString: env.databaseUrl, max: 10 };
 if (env.databaseSsl || (typeof env.databaseUrl === 'string' && env.databaseUrl.includes('sslmode=require'))) {
-  poolConfig.ssl = { rejectUnauthorized: false };
+  poolConfig.ssl = true;
 }
 
 const pool = new Pool(poolConfig);
@@ -14,7 +14,7 @@ let unpooledPool = pool;
 if (env.databaseUrlUnpooled && env.databaseUrlUnpooled !== env.databaseUrl) {
   const unpooledConfig = { connectionString: env.databaseUrlUnpooled, max: 5 };
   if (env.databaseSsl || (typeof env.databaseUrlUnpooled === 'string' && env.databaseUrlUnpooled.includes('sslmode=require'))) {
-    unpooledConfig.ssl = { rejectUnauthorized: false };
+    unpooledConfig.ssl = true;
   }
   unpooledPool = new Pool(unpooledConfig);
   unpooledPool.on('error', (err) => console.error('Unexpected unpooled PG error:', err.message));
@@ -27,4 +27,24 @@ pool.on('error', (err) => console.error('Unexpected PG pool error:', err.message
 const query = (text, params) => pool.query(text, params);
 const unpooledQuery = (text, params) => unpooledPool.query(text, params);
 
-module.exports = { pool, query, unpooledPool, unpooledQuery };
+async function withTransaction(work) {
+  const client = await pool.connect();
+  let discard;
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      discard = rollbackError;
+    }
+    throw error;
+  } finally {
+    client.release(discard);
+  }
+}
+
+module.exports = { pool, query, unpooledPool, unpooledQuery, withTransaction };

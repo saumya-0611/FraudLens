@@ -1,25 +1,10 @@
 const router = require('express').Router();
 const authenticate = require('../middleware/authenticate');
-const env = require('../config/env');
 const { query } = require('../config/db');
 const { asyncHandler, AppError } = require('../utils/errors');
 const { isProducerConnected } = require('../kafka/producer');
 
-// Helper to check ML service health with a 1-second timeout
-async function checkMlService() {
-  if (typeof fetch !== 'function') return 'DOWN';
-  try {
-    const mlUrl = env.mlServiceUrl || 'http://localhost:8000';
-    const res = await fetch(`${mlUrl}/health`, {
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout
-        ? AbortSignal.timeout(1000)
-        : undefined,
-    });
-    return res && res.ok ? 'UP' : 'DOWN';
-  } catch {
-    return 'DOWN';
-  }
-}
+const { checkMlReadiness } = require('../utils/mlReadiness');
 
 // GET /api/dashboard/summary - System & Fraud Detection Summary Statistics
 router.get(
@@ -137,7 +122,7 @@ router.get(
     }
 
     // Check ML service status
-    const mlStatus = await checkMlService();
+    const mlStatus = (await checkMlReadiness()) ? 'UP' : 'DOWN';
 
     // Check Kafka status
     const kafkaStatus = (typeof isProducerConnected === 'function' && isProducerConnected()) ? 'UP' : 'DOWN';

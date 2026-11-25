@@ -20,6 +20,7 @@ const Alerts = lazy(() => import("./pages/Alerts"));
 const Users = lazy(() => import("./pages/admin/Users"));
 const AuditLogs = lazy(() => import("./pages/admin/AuditLogs"));
 const Models = lazy(() => import("./pages/admin/Models"));
+const AnalyzeTransaction = lazy(() => import("./pages/AnalyzeTransaction"));
 
 import "./App.css";
 
@@ -393,6 +394,10 @@ function AppRoutes() {
                             element={
                                 <Models />
                             }
+                        />
+                        <Route
+                            path="/analyse"
+                            element={<AnalyzeTransaction />}
                         />
                     </Route>
                 </Route>

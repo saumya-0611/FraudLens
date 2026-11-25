@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from streaming.jobs.pipeline import process_batch
+from streaming.jobs.pipeline import process_batch, validate_runtime_config
 
 COLUMNS = [
     "transaction_id", "account_ref", "amount", "tx_time", "category", "merchant",
@@ -21,6 +21,7 @@ COLUMNS = [
 
 
 def run_consumer() -> None:
+    validate_runtime_config()
     kafka_mod = importlib.import_module("kafka")
     brokers = os.getenv("KAFKA_BROKERS", "kafka:9092").split(",")
     consumer = kafka_mod.KafkaConsumer(

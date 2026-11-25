@@ -43,8 +43,13 @@ export default function Users() {
     const create = async event => {
         event.preventDefault();
         setFormError("");
-        if (form.password.length < 6) {
-            setFormError("Password must be at least 6 characters.");
+        const password = form.password;
+        if (password.trim().length < 10) {
+            setFormError("Use at least 10 characters, excluding leading and trailing spaces.");
+            return;
+        }
+        if (new TextEncoder().encode(password).byteLength > 72) {
+            setFormError("Use a password of 72 UTF-8 bytes or fewer.");
             return;
         }
 
@@ -124,7 +129,7 @@ export default function Users() {
                 <Modal title="Add user" onClose={() => setDialog(false)}>
                     <form className="form-stack" onSubmit={create}>
                         <label>Username<input required maxLength="50" autoComplete="off" value={form.username} onChange={event => setForm({ ...form, username: event.target.value })} /></label>
-                        <label>Password<input required type="password" autoComplete="new-password" minLength={6} value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} /></label>
+                        <label>Password<input required type="password" autoComplete="new-password" minLength={10} value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} /></label>
                         <label>Role<select value={form.role} onChange={event => setForm({ ...form, role: event.target.value })}><option>ADMIN</option><option>ANALYST</option><option>VIEWER</option></select></label>
                         {formError && <div className="inline-notice error" role="alert">{formError}</div>}
                         <div className="modal-actions">

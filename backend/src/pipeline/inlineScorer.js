@@ -8,30 +8,13 @@
  * writes the hash-chained ALERT_RAISED audit row, and broadcasts over /ws/alerts.
  */
 const env = require('../config/env');
-const { query } = require('../config/db');
-const { audit } = require('../audit/auditLogger');
-const { broadcastAlert, sanitizeAlert } = require('../websocket/alertSocket');
+const { query, withTransaction } = require('../config/db');
+const { appendAudit } = require('../audit/auditLogger');
+const { broadcastAlert } = require('../websocket/alertSocket');
 const { maskAccount } = require('../utils/mask');
 
-const CATEGORY_MAP = {
-  entertainment: 0,
-  food_dining: 1,
-  gas_transport: 2,
-  grocery_net: 3,
-  grocery_pos: 4,
-  health_fitness: 5,
-  home: 6,
-  kids_pets: 7,
-  misc_net: 8,
-  misc_pos: 9,
-  personal_care: 10,
-  shopping_net: 11,
-  shopping_pos: 12,
-  travel: 13,
-};
-
-const HIGH_THRESHOLD = 0.80;
-const LOW_THRESHOLD = 0.40;
+const CATEGORY_MAP = require('../../../shared/category_map.json');
+const { high: HIGH_THRESHOLD, low: LOW_THRESHOLD } = require('../../../shared/thresholds.json');
 const NO_PREVIOUS_TX_SECS = 604800;
 const AVG_WINDOW = 30;
 const EARTH_RADIUS_KM = 6371.0088;
@@ -72,11 +55,10 @@ function computeFeatures(tx, historyRows) {
   const distanceKm = haversineKm(tx.lat, tx.lon, tx.merch_lat, tx.merch_lon);
   const customerAge = tx.customer_age === null || tx.customer_age === undefined ? -1 : Number(tx.customer_age);
 
-  const prior = (historyRows || [])
-    .filter((r) => String(r.transaction_id) !== String(tx.transaction_id))
-    .map((r) => ({ ms: new Date(r.tx_time).getTime(), amount: Number(r.amount || 0) }))
-    .filter((r) => Number.isFinite(r.ms) && r.ms <= txMs)
-    .sort((a, b) => a.ms - b.ms);
+  const prior = historyRows.slice().reverse().map((row) => ({
+    ms: new Date(row.tx_time).getTime(),
+    amount: Number(row.amount),
+  }));
 
   const oneHourAgo = txMs - 3600 * 1000;
   const oneDayAgo = txMs - 24 * 3600 * 1000;
@@ -99,19 +81,19 @@ function computeFeatures(tx, historyRows) {
   const amountRatio = amount / Math.max(avgAmountPrior, 1.0);
 
   return {
-    amount: Number(amount.toFixed(2)),
-    log_amount: Number(Math.log1p(Math.max(0, amount)).toFixed(6)),
+    amount,
+    log_amount: Math.log1p(amount),
     hour,
     day_of_week: dayOfWeek,
     is_night: isNight,
     category_code: categoryCode,
-    distance_km: Number(distanceKm.toFixed(4)),
+    distance_km: distanceKm,
     customer_age: customerAge,
     tx_count_1h: txCount1h,
     tx_count_24h: txCount24h,
-    secs_since_last_tx: Number(secsSinceLastTx.toFixed(2)),
-    avg_amount_prior: Number(avgAmountPrior.toFixed(2)),
-    amount_ratio: Number(amountRatio.toFixed(4)),
+    secs_since_last_tx: secsSinceLastTx,
+    avg_amount_prior: avgAmountPrior,
+    amount_ratio: amountRatio,
   };
 }
 
@@ -143,158 +125,149 @@ function stopInlineHeartbeat() {
   }
 }
 
-async function scoreTransactionInline(tx) {
-  const ingestedAt = tx.ingested_at || new Date().toISOString();
-
-  // 1. Load latest 50 prior transactions for account lookback
-  const histRes = await query(
-    `SELECT transaction_id, amount, tx_time
-     FROM transactions
-     WHERE account_ref = $1
-     ORDER BY tx_time DESC
-     LIMIT 50`,
-    [String(tx.account_ref)]
+async function acceptTransactionInline(tx) {
+  await query(
+    `WITH intake AS (
+       INSERT INTO transactions (
+         transaction_id, account_ref, amount, tx_time, category, merchant,
+         lat, lon, merch_lat, merch_lon, customer_age, ingested_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (transaction_id) DO NOTHING
+     )
+     INSERT INTO inline_scoring_jobs (transaction_id)
+     SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM fraud_results WHERE transaction_id = $1)
+     ON CONFLICT (transaction_id) DO NOTHING`,
+    [
+      tx.transaction_id, tx.account_ref, tx.amount, tx.tx_time, tx.category, tx.merchant || null,
+      tx.lat ?? null, tx.lon ?? null, tx.merch_lat ?? null, tx.merch_lon ?? null,
+      tx.customer_age ?? null, tx.ingested_at,
+    ]
   );
+}
 
-  const features = computeFeatures(tx, histRes.rows || []);
-
-  // 2. Call ml-service /predict with X-Internal-Token
-  const mlBase = (env.mlServiceUrl || 'http://localhost:8000').replace(/\/+$/, '');
+async function predict(transactionId, features) {
+  const mlBase = env.mlServiceUrl.replace(/\/+$/, '');
   const headers = { 'Content-Type': 'application/json' };
   if (env.internalMlToken) headers['X-Internal-Token'] = env.internalMlToken;
+  const response = await fetch(`${mlBase}/predict`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ instances: [{ transaction_id: transactionId, features }] }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('ML returned an unsuccessful response.');
 
-  let modelVersion = 'v1';
-  let fraudProbability = 0.01;
-  let anomalyScore = 0.0;
-  let isAnomaly = false;
-  let topReasons = [];
-
-  try {
-    const res = await fetch(`${mlBase}/predict`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        instances: [{ transaction_id: String(tx.transaction_id), features }],
-      }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
-    });
-    if (res.ok) {
-      const payload = await res.json();
-      modelVersion = payload.model_version || 'v1';
-      const pred = (payload.predictions || [])[0];
-      if (pred) {
-        fraudProbability = Number(pred.fraud_probability ?? 0.01);
-        anomalyScore = Number(pred.anomaly_score ?? 0.0);
-        isAnomaly = Boolean(pred.is_anomaly);
-        topReasons = Array.isArray(pred.top_reasons) ? pred.top_reasons : [];
-      }
-    } else {
-      console.error(`[InlineScorer] ML /predict returned HTTP ${res.status}`);
-    }
-  } catch (err) {
-    console.error('[InlineScorer] ML /predict failed:', err.message);
+  const payload = await response.json();
+  const modelVersion = payload?.model_version;
+  const predictions = payload?.predictions;
+  const result = Array.isArray(predictions) && predictions.length === 1 ? predictions[0] : undefined;
+  if (typeof modelVersion !== 'string' || !modelVersion.trim() || modelVersion.length > 30 ||
+      result?.transaction_id !== transactionId ||
+      !Number.isFinite(result.fraud_probability) || result.fraud_probability < 0 || result.fraud_probability > 1 ||
+      !Number.isFinite(result.anomaly_score) || result.anomaly_score < 0 || result.anomaly_score > 1 ||
+      typeof result.is_anomaly !== 'boolean' ||
+      !Array.isArray(result.top_reasons) || !result.top_reasons.every((reason) =>
+        reason && typeof reason.feature === 'string' && typeof reason.text === 'string' && Number.isFinite(reason.impact))) {
+    throw new Error('ML returned an invalid prediction.');
   }
+  return { ...result, model_version: modelVersion };
+}
 
-  const riskCategory = classifyRisk(fraudProbability, isAnomaly);
-
-  // 3. Persist transaction + fraud_result idempotently
-  await query(
-    `INSERT INTO transactions (
-       transaction_id, account_ref, amount, tx_time, category, merchant,
-       lat, lon, merch_lat, merch_lon, customer_age, ingested_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (transaction_id) DO NOTHING`,
-    [
-      String(tx.transaction_id),
-      String(tx.account_ref),
-      Number(tx.amount),
-      tx.tx_time,
-      String(tx.category),
-      tx.merchant || null,
-      tx.lat ?? null,
-      tx.lon ?? null,
-      tx.merch_lat ?? null,
-      tx.merch_lon ?? null,
-      tx.customer_age ?? null,
-      ingestedAt,
-    ]
-  );
-
-  await query(
-    `INSERT INTO fraud_results (
-       transaction_id, fraud_probability, anomaly_score, is_anomaly,
-       risk_category, top_reasons, features, model_version, scored_at
-     ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,NOW())
-     ON CONFLICT (transaction_id) DO NOTHING`,
-    [
-      String(tx.transaction_id),
-      fraudProbability,
-      anomalyScore,
-      isAnomaly,
-      riskCategory,
-      JSON.stringify(topReasons),
-      JSON.stringify(features),
-      modelVersion,
-    ]
-  );
-
-  // 4. Create alert, append hash-chained audit row, and broadcast on HIGH_RISK
-  if (riskCategory === 'HIGH_RISK') {
-    const alertRes = await query(
-      `INSERT INTO alerts (transaction_id, risk_score, state)
-       VALUES ($1, $2, 'NEW')
+async function persistScore(tx, features, prediction) {
+  const { fraud_probability, anomaly_score, is_anomaly, top_reasons, model_version } = prediction;
+  const category = classifyRisk(fraud_probability, is_anomaly);
+  return withTransaction(async (client) => {
+    const { rows: [score] } = await client.query(
+      `INSERT INTO fraud_results (
+         transaction_id, fraud_probability, anomaly_score, is_anomaly, risk_category,
+         top_reasons, features, model_version
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)
        ON CONFLICT (transaction_id) DO NOTHING
-       RETURNING alert_id, created_at`,
-      [String(tx.transaction_id), fraudProbability]
+       RETURNING fraud_probability, risk_category`,
+      [tx.transaction_id, fraud_probability, anomaly_score, is_anomaly, category,
+        JSON.stringify(top_reasons), JSON.stringify(features), model_version]
     );
-    const created = alertRes.rows && alertRes.rows[0];
-    if (created) {
-      const alertObj = sanitizeAlert({
-        alert_id: created.alert_id,
-        transaction_id: String(tx.transaction_id),
-        account_masked: maskAccount(String(tx.account_ref)),
-        amount: Number(tx.amount),
-        category: String(tx.category),
-        risk_score: fraudProbability,
-        risk_category: riskCategory,
-        top_reasons: topReasons,
-        model_version: modelVersion,
-        created_at: created.created_at instanceof Date
-          ? created.created_at.toISOString()
-          : new Date().toISOString(),
-      });
 
-      try {
-        await audit({
-          userId: null,
-          username: 'system',
-          action: 'ALERT_RAISED',
-          entity: 'alert',
-          entityId: String(created.alert_id),
+    let alert;
+    if (score?.risk_category === 'HIGH_RISK') {
+      const { rows: [created] } = await client.query(
+        `INSERT INTO alerts (transaction_id, risk_score, state)
+         VALUES ($1, $2, 'NEW')
+         ON CONFLICT (transaction_id) DO NOTHING
+         RETURNING alert_id, created_at`,
+        [tx.transaction_id, score.fraud_probability]
+      );
+      if (created) {
+        alert = {
+          alert_id: created.alert_id,
+          transaction_id: tx.transaction_id,
+          account_masked: maskAccount(tx.account_ref),
+          amount: Number(tx.amount),
+          category: tx.category,
+          risk_score: score.fraud_probability,
+          risk_category: score.risk_category,
+          top_reasons,
+          model_version,
+          created_at: created.created_at.toISOString(),
+        };
+        await appendAudit(client, {
+          action: 'ALERT_RAISED', entity: 'alert', entityId: String(alert.alert_id),
           details: {
-            transaction_id: alertObj.transaction_id,
-            risk_score: alertObj.risk_score,
-            risk_category: alertObj.risk_category,
-            amount: alertObj.amount,
-            category: alertObj.category,
+            transaction_id: alert.transaction_id, risk_score: alert.risk_score,
+            risk_category: alert.risk_category, amount: alert.amount, category: alert.category,
           },
         });
-      } catch (err) {
-        console.error('[InlineScorer] Audit log failed:', err.message);
-      }
-
-      try {
-        broadcastAlert(alertObj);
-      } catch (err) {
-        console.error('[InlineScorer] WebSocket broadcast warning:', err.message);
       }
     }
+
+    return alert;
+  });
+}
+
+async function scoreTransactionInline(transactionId) {
+  const { rows: [tx] } = await query(
+    `SELECT t.*, EXISTS (SELECT 1 FROM fraud_results WHERE transaction_id = t.transaction_id) AS scored
+     FROM transactions t WHERE t.transaction_id = $1`,
+    [transactionId]
+  );
+  if (!tx || tx.scored) return true;
+
+  // Replays always use the first accepted payload stored under this transaction ID.
+  const { rows: history } = await query(
+    `SELECT prior.transaction_id, prior.amount, prior.tx_time
+     FROM transactions AS target
+     JOIN transactions AS prior ON prior.account_ref = target.account_ref
+     WHERE target.transaction_id = $1
+       AND (prior.tx_time, prior.transaction_id COLLATE "C")
+         < (target.tx_time, target.transaction_id COLLATE "C")
+     ORDER BY prior.tx_time DESC, prior.transaction_id COLLATE "C" DESC
+     LIMIT 50`,
+    [transactionId]
+  );
+  const features = computeFeatures(tx, history);
+
+  let prediction;
+  try {
+    prediction = await predict(transactionId, features);
+  } catch {
+    console.warn('[InlineScorer] Inference did not complete. Transaction remains unscored unless another attempt commits.');
+    return false;
   }
 
+  const alert = await persistScore(tx, features, prediction);
+  if (alert) {
+    try {
+      await broadcastAlert(alert);
+    } catch (error) {
+      console.warn('[InlineScorer] WebSocket broadcast warning:', error.message);
+    }
+  }
   await touchStreamingHeartbeat();
+  return true;
 }
 
 module.exports = {
+  acceptTransactionInline,
   scoreTransactionInline,
   computeFeatures,
   classifyRisk,

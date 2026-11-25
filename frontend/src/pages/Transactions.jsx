@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { request } from "../services/api";
 import { errorMessage, localTime } from "../services/format";
 import { Empty, ErrorState, Loading, Modal, RiskBadge } from "../components/PageState";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Transactions() {
   const [params, setParams] = useSearchParams();
@@ -17,6 +18,7 @@ export default function Transactions() {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
+  const { user } = useAuth();
 
   const load = useCallback(() => {
     const search = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -67,6 +69,7 @@ export default function Transactions() {
     <div className="page-stack">
       <header className="page-heading">
         <div><span className="eyebrow">ACTIVITY</span><h1>Transactions</h1><p>Review scored and pending transactions.</p></div>
+        {user?.role === "ADMIN" && <Link className="button primary" to="/analyse">Analyse transaction</Link>}
       </header>
 
       <section className="panel filter-bar">
@@ -122,7 +125,7 @@ export default function Transactions() {
               <p><b>Merchant</b><span>{detail.merchant || "—"}</span></p>
               <p><b>Risk</b><RiskBadge value={detail.risk_category} /></p>
               <p><b>Fraud probability</b><span>{detail.fraud_probability == null ? "Unscored" : `${(detail.fraud_probability * 100).toFixed(1)}%`}</span></p>
-              <p><b>Anomaly</b><span>{detail.is_anomaly ? "Yes" : "No"}</span></p>
+              <p><b>Anomaly</b><span>{detail.is_anomaly === null || detail.is_anomaly === undefined ? "Pending" : detail.is_anomaly ? "Yes" : "No"}</span></p>
               <p><b>Model version</b><span>{detail.model_version || "—"}</span></p>
               <p><b>Transaction time</b><span>{localTime(timestamps.tx_time)}</span></p>
               <p><b>Scored at</b><span>{localTime(timestamps.scored_at)}</span></p>

@@ -4,65 +4,71 @@ const app = require('./app');
 const { initAlertSocket, closeAlertSocket } = require('./websocket/alertSocket');
 const { startAlertConsumer, stopAlertConsumer } = require('./kafka/alertConsumer');
 const { connectProducer, disconnectProducer } = require('./kafka/producer');
-const { query } = require('./config/db');
 const { ensureSchema } = require('../scripts/bootstrapSchema');
-const { seedUsers } = require('../scripts/seed');
-const { seedSampleData } = require('../scripts/seed_sample_data');
 
-// Plain http.Server (not app.listen) so the WebSocket server (B5) attaches to it.
 const server = http.createServer(app);
-
-// Attach WebSocket server on /ws/alerts
-initAlertSocket(server);
-
-const inlineMode = (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase() === 'inline';
-
-server.listen(env.port, () => {
-  console.log(`FraudLens backend listening on port ${env.port} (pipeline=${inlineMode ? 'inline' : 'kafka'})`);
-  if (env.nodeEnv !== 'test') {
-    ensureSchema()
-      .then(() => query("DELETE FROM users WHERE password_hash !~ '^\\$2[aby]\\$'"))
-      .then(() => seedUsers())
-      .then(async () => {
-        if (process.env.AUTO_SEED_SAMPLE === 'true') {
-          const { rows } = await query('SELECT COUNT(*)::int AS cnt FROM transactions');
-          if (Number(rows?.[0]?.cnt || 0) === 0) {
-            await seedSampleData(60);
-          }
-        }
-      })
-      .catch((err) => {
-        console.error('[Bootstrap] Initial schema/seed warning:', err.message);
-      });
-
-    connectProducer().catch((err) => {
-      console.error('[Kafka] Producer initial connect warning:', err.message);
-    });
-
-    if (!inlineMode) {
-      startAlertConsumer().catch((err) => {
-        console.error('[Kafka] Alert consumer failed to start:', err.message);
-      });
-    }
-  }
-});
-
-// Stop cleanly on docker stop / Ctrl+C.
+const mode = (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase();
+const PIPELINE_RETRY_MS = 5000;
 let isShuttingDown = false;
-const shutdown = async () => {
+let pipelineRetry;
+
+async function startPipeline() {
+  if (isShuttingDown) return;
+  const services = [connectProducer()];
+  if (mode === 'kafka') services.push(startAlertConsumer());
+  const results = await Promise.allSettled(services);
+  if (isShuttingDown || results.every((result) => result.status === 'fulfilled')) return;
+  console.warn('[Bootstrap] Pipeline initialization failed; retrying.');
+  pipelineRetry = setTimeout(startPipeline, PIPELINE_RETRY_MS);
+  pipelineRetry.unref();
+}
+
+async function startServer() {
+  if (mode !== 'inline' && mode !== 'kafka') {
+    throw Object.assign(new Error('PIPELINE_MODE must be inline or kafka.'), { code: 'INVALID_PIPELINE_MODE' });
+  }
+  if (env.nodeEnv !== 'test') await ensureSchema();
+  initAlertSocket(server);
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(env.port, () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
+    });
+  } catch (error) {
+    closeAlertSocket();
+    throw error;
+  }
+
+  console.log(`FraudLens backend listening on port ${env.port} (pipeline=${mode})`);
+  if (env.nodeEnv !== 'test') void startPipeline();
+  return server;
+}
+
+async function shutdown() {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  try {
-    await stopAlertConsumer();
-    await disconnectProducer();
-  } catch (err) {
-    console.error('[Shutdown] Error stopping alert consumer:', err.message);
-  }
+  clearTimeout(pipelineRetry);
+  const closed = new Promise((resolve) => server.close(resolve));
   closeAlertSocket();
-  server.close(() => process.exit(0));
-};
+  const results = await Promise.allSettled([stopAlertConsumer(), disconnectProducer(), closed]);
+  if (results.some((result) => result.status === 'rejected')) {
+    console.error('[Shutdown] One or more pipeline services did not close cleanly.');
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+if (require.main === module) {
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+  startServer().catch((error) => {
+    console.error('[Bootstrap] Backend startup failed:', error.code || error.name);
+    process.exitCode = 1;
+  });
+}
 
 module.exports = server;
+module.exports.startServer = startServer;

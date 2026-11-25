@@ -12,7 +12,7 @@ CREATE TABLE users (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Written ONLY by streaming (Spark/pipeline). Backend only publishes to Kafka.
+-- Streaming writes these rows in Kafka mode. Express writes them in inline mode.
 CREATE TABLE transactions (
   transaction_id   VARCHAR(64) PRIMARY KEY,
   account_ref      VARCHAR(64) NOT NULL,
@@ -29,6 +29,14 @@ CREATE TABLE transactions (
 );
 CREATE INDEX idx_tx_account_time ON transactions (account_ref, tx_time);
 CREATE INDEX idx_tx_time ON transactions (tx_time DESC);
+
+CREATE TABLE inline_scoring_jobs (
+  transaction_id VARCHAR(64) PRIMARY KEY REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+  available_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  lease_token    UUID
+);
+CREATE INDEX idx_inline_scoring_due ON inline_scoring_jobs (available_at, transaction_id);
 
 CREATE TABLE fraud_results (
   transaction_id    VARCHAR(64) PRIMARY KEY REFERENCES transactions(transaction_id),
@@ -57,6 +65,14 @@ CREATE TABLE alerts (
 );
 CREATE INDEX idx_alerts_state ON alerts (state, created_at DESC);
 
+CREATE TABLE alert_outbox (
+  alert_id       INTEGER PRIMARY KEY REFERENCES alerts(alert_id) ON DELETE CASCADE,
+  transaction_id VARCHAR(64) NOT NULL,
+  payload        JSONB NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_alert_outbox_created ON alert_outbox (created_at, alert_id);
+
 -- Written ONLY by backend (single writer, hash chain).
 CREATE TABLE audit_logs (
   id          BIGSERIAL PRIMARY KEY,
@@ -72,6 +88,8 @@ CREATE TABLE audit_logs (
   entry_hash  CHAR(64) NOT NULL
 );
 CREATE INDEX idx_audit_time ON audit_logs (event_time DESC);
+CREATE INDEX idx_audit_alert_raised ON audit_logs (entity_id)
+  WHERE action = 'ALERT_RAISED' AND entity = 'alert';
 
 CREATE TABLE model_versions (
   version        VARCHAR(30) PRIMARY KEY,           -- e.g. 'v1', 'v2'

@@ -9,6 +9,8 @@ pipeline {
         COMPOSE_PROJECT_NAME = 'fraudlens_ci'
         FRONTEND_HOST_PORT   = '6173'
         BACKEND_HOST_PORT    = '6000'
+        COMPOSE_ENV_FILES    = '.env.ci'
+        FRAUDLENS_ENV_FILE   = '.env.ci'
     }
 
     stages {
@@ -18,7 +20,7 @@ pipeline {
                     test -f docs/CONTRACTS.md
                     test -f database/init.sql
                     test -f shared/thresholds.json
-                    if [ ! -f .env ]; then cp .env.example .env; fi
+                    sh scripts/prepare_ci_env.sh
                     docker compose config --quiet
                 '''
             }
@@ -44,10 +46,9 @@ pipeline {
         stage('4. Docker Pre-Flight Build & Health Gate') {
             steps {
                 sh '''
-                    docker compose -p ${COMPOSE_PROJECT_NAME} up --build -d postgres kafka kafka-init ml-service backend
-                    sleep 12
-                    curl -fsS http://localhost:${BACKEND_HOST_PORT}/health
-                    docker compose -p ${COMPOSE_PROJECT_NAME} exec -T ml-service curl -fsS -I http://localhost:8000/health
+                    docker compose -p ${COMPOSE_PROJECT_NAME} up --build --wait --wait-timeout 180 backend
+                    docker compose -p ${COMPOSE_PROJECT_NAME} exec -T backend wget -qO- http://localhost:5000/ready
+                    docker compose -p ${COMPOSE_PROJECT_NAME} exec -T ml-service curl -fsS -I http://localhost:8000/ready
                 '''
             }
         }

@@ -1,5 +1,5 @@
 {
   "high": 0.80,
   "low": 0.40,
-  "notes": "Tuned on time-ordered holdout set so HIGH_RISK (p >= 0.80 or (p >= 0.40 and is_anomaly)) flags ~1.4% of transactions within the 1-2% analyst alert budget while capturing 82%+ fraud recall. The 0.40 low threshold routes borderline scores and Isolation Forest anomalies to SUSPICIOUS for analyst visibility without causing alert fatigue."
+  "notes": "The saved time-ordered holdout evaluation reports a 4.25% HIGH_RISK alert rate and 90.79% fraud recall with these thresholds. The analyst alert budget is 1–2%; retuning requires a separate validated evaluation."
 }

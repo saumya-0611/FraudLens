@@ -1,10 +1,11 @@
 const { Kafka } = require('kafkajs');
 const env = require('../config/env');
 const {
-  scoreTransactionInline,
+  acceptTransactionInline,
   startInlineHeartbeat,
   stopInlineHeartbeat,
 } = require('../pipeline/inlineScorer');
+const { startInlineWorker, stopInlineWorker, wakeInlineWorker } = require('../pipeline/inlineWorker');
 
 const isInlineMode = () => (process.env.PIPELINE_MODE || env.pipelineMode || 'kafka').toLowerCase() === 'inline';
 
@@ -22,6 +23,7 @@ async function connectProducer() {
   if (isInlineMode()) {
     connected = true;
     startInlineHeartbeat();
+    startInlineWorker();
     return;
   }
   if (connected) return;
@@ -47,13 +49,8 @@ async function publishTransaction(transaction) {
   };
 
   if (isInlineMode()) {
-    connected = true;
-    // Score asynchronously so POST /api/transactions returns 202 Accepted immediately
-    setImmediate(() => {
-      scoreTransactionInline(message).catch((err) => {
-        console.error('[InlineScorer] Transaction processing failed:', err.message);
-      });
-    });
+    await acceptTransactionInline(message);
+    wakeInlineWorker();
     return;
   }
 
@@ -73,6 +70,7 @@ async function publishTransaction(transaction) {
 async function disconnectProducer() {
   if (isInlineMode()) {
     stopInlineHeartbeat();
+    await stopInlineWorker();
     connected = false;
     return;
   }

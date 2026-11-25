@@ -29,7 +29,19 @@ function formatTrendMinute(value) {
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatMetric(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString() : "—";
+}
+
+function formatLatency(value) {
+  const formatted = formatMetric(value);
+  return formatted === "—" ? formatted : `${formatted} ms`;
+}
+
 export default function Dashboard() {
+  const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
   const [summary, setSummary] = useState(null);
   const [trends, setTrends] = useState([]);
   const [alerts, setAlerts] = useState([]);
@@ -98,21 +110,23 @@ export default function Dashboard() {
     <div className="page-stack">
       <header className="page-heading">
         <div>
-          <span className="eyebrow">LIVE MONITORING</span>
+          <span className="eyebrow">{mockMode ? "SYNTHETIC DEMO DATA" : "BACKEND-REPORTED DATA"}</span>
           <h1>Overview</h1>
-          <p>Transaction activity and platform health at a glance.</p>
+          <p>Transaction activity and service health reported by the configured backend.</p>
         </div>
       </header>
+      <p className="dashboard-data-note" role="note">Service health below comes from the dashboard API and is separate from this browser’s connection. The configured backend may include seeded demonstration records.</p>
       {error && <ErrorState message={error} onRetry={refresh} />}
 
       <section className="status-strip" aria-label="System status">
         {serviceNames.map(name => {
-          const up = systems[name] === "UP";
+          const serviceStatus = systems[name];
+          const statusLabel = serviceStatus === "UP" || serviceStatus === "DOWN" ? serviceStatus : "UNKNOWN";
           return (
             <div className="status-item" key={name}>
-              <i className={up ? "online" : "offline"} aria-hidden="true" />
+              <i className={statusLabel === "UP" ? "online" : statusLabel === "DOWN" ? "offline" : ""} aria-hidden="true" />
               <span>{name.replace("_", " ")}</span>
-              <strong>{up ? "UP" : "DOWN"}</strong>
+              <strong>{statusLabel}</strong>
             </div>
           );
         })}
@@ -125,7 +139,7 @@ export default function Dashboard() {
               <span>{label}</span>
               <span className="stat-icon" aria-hidden="true"><Icon size={18} strokeWidth={1.8} /></span>
             </div>
-            <strong>{Number(value || 0).toLocaleString()}</strong>
+            <strong>{formatMetric(value)}</strong>
           </article>
         ))}
       </section>
@@ -136,7 +150,7 @@ export default function Dashboard() {
           {latencyMetrics.map(([label, key]) => (
             <div key={key}>
               <span>{label}</span>
-              <strong>{Number(summary.latency_ms?.[key] || 0).toLocaleString()} ms</strong>
+              <strong>{formatLatency(summary.latency_ms?.[key])}</strong>
             </div>
           ))}
         </div>
@@ -204,7 +218,7 @@ export default function Dashboard() {
           <div className="section-heading"><div><h2>Active model</h2><p>Current scoring configuration</p></div></div>
           <strong className="model-version">{summary.active_model?.version || "—"}</strong>
           <div className="model-meta"><span>Drift status</span><StateBadge value={summary.active_model?.drift_status} /></div>
-          <small>Updated {localTime(summary.updated_at)}</small>
+          <small>Backend snapshot updated {localTime(summary.updated_at)}</small>
         </article>
       </section>
     </div>

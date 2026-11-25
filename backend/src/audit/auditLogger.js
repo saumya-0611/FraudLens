@@ -37,6 +37,55 @@ function computeEntryHash(prevHash, eventTimeIso, username, action, entity, enti
   return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
+async function appendAudit(client, entry) {
+  const action = entry.action || 'UNKNOWN_ACTION';
+  await client.query('SELECT pg_advisory_xact_lock(42)');
+
+  const lastRes = await client.query(
+    'SELECT entry_hash FROM audit_logs ORDER BY id DESC LIMIT 1'
+  );
+  const prevHash = lastRes.rows[0]?.entry_hash
+    ? String(lastRes.rows[0].entry_hash).trim()
+    : GENESIS_HASH;
+
+  const eventTimeIso = new Date().toISOString();
+  const userId =
+    Number.isInteger(entry.userId) && entry.userId > 0 ? entry.userId : null;
+  const username = entry.username || entry.req?.user?.username || 'system';
+  const entity = entry.entity || null;
+  const entityId = entry.entityId != null ? String(entry.entityId) : null;
+  const detailsJson = JSON.stringify(entry.details ?? {}, omitConfidentialFields);
+  const ip = entry.req?.ip || entry.req?.socket?.remoteAddress || null;
+
+  const entryHash = computeEntryHash(
+    prevHash,
+    eventTimeIso,
+    username,
+    action,
+    entity,
+    entityId,
+    JSON.parse(detailsJson)
+  );
+
+  await client.query(
+    `INSERT INTO audit_logs (
+       event_time, user_id, username, action, entity, entity_id, details, ip, prev_hash, entry_hash
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
+    [
+      eventTimeIso,
+      userId,
+      username,
+      action,
+      entity,
+      entityId,
+      detailsJson,
+      ip,
+      prevHash,
+      entryHash,
+    ]
+  );
+}
+
 async function audit(entry = {}) {
   const action = entry.action || 'UNKNOWN_ACTION';
   if (!pool || typeof pool.connect !== 'function') {
@@ -47,51 +96,7 @@ async function audit(entry = {}) {
   try {
     client = await pool.connect();
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(42)');
-
-    const lastRes = await client.query(
-      'SELECT entry_hash FROM audit_logs ORDER BY id DESC LIMIT 1'
-    );
-    const prevHash = lastRes.rows[0]?.entry_hash
-      ? String(lastRes.rows[0].entry_hash).trim()
-      : GENESIS_HASH;
-
-    const eventTimeIso = new Date().toISOString();
-    const userId =
-      Number.isInteger(entry.userId) && entry.userId > 0 ? entry.userId : null;
-    const username = entry.username || entry.req?.user?.username || 'system';
-    const entity = entry.entity || null;
-    const entityId = entry.entityId != null ? String(entry.entityId) : null;
-    const detailsJson = JSON.stringify(entry.details ?? {}, omitConfidentialFields);
-    const ip = entry.req?.ip || entry.req?.socket?.remoteAddress || null;
-
-    const entryHash = computeEntryHash(
-      prevHash,
-      eventTimeIso,
-      username,
-      action,
-      entity,
-      entityId,
-      JSON.parse(detailsJson)
-    );
-
-    await client.query(
-      `INSERT INTO audit_logs (
-         event_time, user_id, username, action, entity, entity_id, details, ip, prev_hash, entry_hash
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
-      [
-        eventTimeIso,
-        userId,
-        username,
-        action,
-        entity,
-        entityId,
-        detailsJson,
-        ip,
-        prevHash,
-        entryHash,
-      ]
-    );
+    await appendAudit(client, entry);
     await client.query('COMMIT');
   } catch (err) {
     if (client) {
@@ -108,4 +113,4 @@ async function audit(entry = {}) {
   }
 }
 
-module.exports = { audit, computeEntryHash, GENESIS_HASH };
+module.exports = { audit, appendAudit, computeEntryHash, GENESIS_HASH };

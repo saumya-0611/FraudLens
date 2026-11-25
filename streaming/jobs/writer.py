@@ -2,13 +2,15 @@
 writer.py - Idempotent PostgreSQL batch persistence helpers for FraudLens streaming
 (CONTRACTS.md §3, T1.1).
 
-Streaming is the single writer for:
+Streaming persists:
   - transactions       (ON CONFLICT DO NOTHING)
   - fraud_results      (ON CONFLICT DO NOTHING)
   - alerts             (ON CONFLICT DO NOTHING RETURNING alert_id, created_at)
+  - alert_outbox       (queued in the same transaction as the alert)
   - service_heartbeats (ON CONFLICT DO UPDATE SET last_seen = now())
 """
 from datetime import timezone
+import json
 from typing import Any, Dict, List, Tuple
 
 from psycopg2.extras import execute_values
@@ -44,11 +46,11 @@ def insert_transactions_idempotent(cur, tx_rows: List[Tuple[Any, ...]]) -> None:
     )
 
 
-def insert_fraud_results_idempotent(cur, fr_rows: List[Tuple[Any, ...]]) -> None:
-    """Idempotently insert scored fraud_results rows."""
+def insert_fraud_results_idempotent(cur, fr_rows: List[Tuple[Any, ...]]) -> set[str]:
+    """Return the IDs of score rows inserted by this batch."""
     if not fr_rows:
-        return
-    execute_values(
+        return set()
+    rows = execute_values(
         cur,
         """
         INSERT INTO fraud_results (
@@ -56,17 +58,16 @@ def insert_fraud_results_idempotent(cur, fr_rows: List[Tuple[Any, ...]]) -> None
           risk_category, top_reasons, features, model_version
         ) VALUES %s
         ON CONFLICT (transaction_id) DO NOTHING
+        RETURNING transaction_id
         """,
         fr_rows,
+        fetch=True,
     )
+    return {transaction_id for (transaction_id,) in rows}
 
 
-def insert_high_risk_alerts(cur, high_risk_items: List[Tuple[Any, float, List[Dict[str, Any]], str]]) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    Insert HIGH_RISK rows into `alerts` with ON CONFLICT DO NOTHING RETURNING alert_id, created_at.
-    Returns Kafka messages to publish ONLY for newly inserted alerts (preventing duplicate alerts on replay).
-    """
-    alerts_to_publish: List[Tuple[str, Dict[str, Any]]] = []
+def insert_high_risk_alerts(cur, high_risk_items: List[Tuple[Any, float, List[Dict[str, Any]], str]]) -> None:
+    """Persist new alert notifications alongside the alert through the same cursor."""
     for row, prob, top_reasons, m_ver in high_risk_items:
         tx_id = str(row["transaction_id"])
         cur.execute(
@@ -82,21 +83,19 @@ def insert_high_risk_alerts(cur, high_risk_items: List[Tuple[Any, float, List[Di
         if inserted:
             alert_id, created_at = inserted
             created_iso = created_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            alerts_to_publish.append(
-                (
-                    tx_id,
-                    {
-                        "alert_id": int(alert_id),
-                        "transaction_id": tx_id,
-                        "account_masked": mask_account(str(row["account_ref"])),
-                        "amount": float(row["amount"]),
-                        "category": str(row["category"]),
-                        "risk_score": round(prob, 4),
-                        "risk_category": "HIGH_RISK",
-                        "top_reasons": top_reasons,
-                        "model_version": m_ver,
-                        "created_at": created_iso,
-                    },
-                )
+            payload = {
+                "alert_id": int(alert_id),
+                "transaction_id": tx_id,
+                "account_masked": mask_account(str(row["account_ref"])),
+                "amount": float(row["amount"]),
+                "category": str(row["category"]),
+                "risk_score": round(prob, 4),
+                "risk_category": "HIGH_RISK",
+                "top_reasons": top_reasons,
+                "model_version": m_ver,
+                "created_at": created_iso,
+            }
+            cur.execute(
+                "INSERT INTO alert_outbox (alert_id, transaction_id, payload) VALUES (%s, %s, %s::jsonb)",
+                (alert_id, tx_id, json.dumps(payload)),
             )
-    return alerts_to_publish

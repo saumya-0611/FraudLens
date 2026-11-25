@@ -247,13 +247,15 @@ def load_train_test_splits(
         test_df = _generate_synthetic_dataset(
             n_rows=min(max_test_rows, 800),
             start_dt=datetime(2026, 6, 1, tzinfo=timezone.utc),
-            seed=seed + 100,
+            seed=142,  # Keep the v1 holdout fixed when candidate training seeds change.
         )
 
     if include_db_feedback:
         fb_df = _load_db_feedback_rows()
         if fb_df is not None and not fb_df.empty:
-            train_df = pd.concat([train_df, fb_df], ignore_index=True)
+            feedback = fb_df[~fb_df["transaction_id"].isin(test_df["transaction_id"])]
+            train_df = pd.concat([train_df, feedback], ignore_index=True)
+            train_df = train_df.drop_duplicates(subset="transaction_id", keep="last")
             train_df = train_df.sort_values(["tx_time", "transaction_id"]).reset_index(drop=True)
 
     return train_df, test_df

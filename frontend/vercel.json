@@ -9,6 +9,10 @@
       "destination": "https://fraudlens-backend-j17p.onrender.com/health"
     },
     {
+      "source": "/ready",
+      "destination": "https://fraudlens-backend-j17p.onrender.com/ready"
+    },
+    {
       "source": "/api-docs",
       "destination": "https://fraudlens-backend-j17p.onrender.com/api-docs"
     },

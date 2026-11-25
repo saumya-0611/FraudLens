@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
         changeOrigin: true,
       },
 
+      '^/(health|ready)$': {
+        target: backendTarget,
+        changeOrigin: true,
+      },
+
       '/ws': {
         target: backendTarget,
         changeOrigin: true,
