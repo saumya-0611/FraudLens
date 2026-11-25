@@ -1,0 +1,12 @@
+# Safe local user provisioning
+
+FraudLens needs a controlled way to create initial operator accounts and administer existing users. Routine startup must preserve account IDs, credentials, role assignments, disabled status, and social-only accounts.
+
+## Two provisioning paths
+
+- An authenticated ADMIN can list users, create an account, or patch its password, role, or status. The schema rejects fields outside the allowed payload. Passwords use bcrypt cost 10 and the response projects public account columns. Duplicate usernames return `409`, and the API prevents an administrator from disabling or demoting their own account. An authorized password change clears the account’s lockout fields. [User routes](../../../backend/src/routes/users.routes.js) · [Request schemas](../../../backend/src/validation/schemas.js)
+- The explicit `npm --prefix backend run seed` command first finds existing initial usernames. It validates explicit, distinct, non-example passwords for missing accounts before inserting. It uses bcrypt cost 10 and `ON CONFLICT (username) DO NOTHING`. The existing credential, role, status, and lockout fields are preserved on repeat and concurrent seeding. Server startup bootstraps the schema without running destructive account cleanup or invoking the seed script. [Seed command](../../../backend/scripts/seed.js) · [Startup](../../../backend/src/server.js)
+
+Social-only accounts use a null password hash when the approved OAuth schema is installed. The seed command selects existing users by their names, so a null credential does not turn an existing account into a seed target. The password endpoint can use its generic failure path for an account without a usable bcrypt hash. [Social schema proposal](../../../database/proposals/social-oauth.sql) · [Password endpoint](../../../backend/src/routes/auth.routes.js)
+
+Shivansh contributed user-administration hardening and the preservation fix in `e2cebc1`. The combined startup implementation on main also reflects Amrita’s non-destructive startup commit `08551c8` and lead integration. The tests exercise disabled and reassigned users, null hashes, repeat and concurrent seeding, and startup behavior. Provisioning approval, secret generation and existing-account recovery remain operational responsibilities. [Seed tests](../../../backend/src/tests/seed.test.js) · [User-administration tests](../../../backend/src/tests/securityAdmin.test.js) · [Startup tests](../../../backend/src/tests/serverStartup.test.js)
