@@ -35,4 +35,3 @@ function checkKafkaReadiness() {
 }
 
 module.exports = { checkKafkaReadiness };
-

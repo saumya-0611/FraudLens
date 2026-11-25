@@ -22,4 +22,3 @@ async function checkMlReadiness() {
 }
 
 module.exports = { checkMlReadiness, READINESS_TIMEOUT_MS };
-
