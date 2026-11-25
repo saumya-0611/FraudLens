@@ -267,11 +267,12 @@ CONTROLLED_FIXTURE = r"""
 
 
 def _create_headless_driver():
-    """Attempt to initialize a headless Chrome WebDriver via Selenium 4."""
+    """Attempt to initialize a Chrome WebDriver via Selenium 4 (headless unless FRAUDLENS_E2E_HEADED=1)."""
     webdriver = importlib.import_module("selenium.webdriver")
     chrome_opts_mod = importlib.import_module("selenium.webdriver.chrome.options")
     options = chrome_opts_mod.Options()
-    options.add_argument("--headless=new")
+    if os.getenv("FRAUDLENS_E2E_HEADED", "").lower() not in ("1", "true", "yes"):
+        options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1440,900")
@@ -633,7 +634,15 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
                     self.assertTrue(menu.is_displayed(), f"Mobile menu missing at {width}px")
                     menu.click()
                     self.assertIn("sidebar-open", self.driver.find_element("css selector", ".sidebar").get_attribute("class"))
-                    self.driver.find_element("css selector", ".sidebar a[href='/analyse']").click()
+                    WebDriverWait(self.driver, 5).until(
+                        lambda d: d.execute_script(
+                            "const el = document.querySelector(\".sidebar a[href='/analyse']\");"
+                            "if (!el) return false;"
+                            "const rect = el.getBoundingClientRect();"
+                            "return rect.left >= 0 && rect.width > 0 && rect.height > 0;"
+                        )
+                    )
+                    self._click_visible(".sidebar a[href='/analyse']")
                 else:
                     self.driver.get(FRONTEND_URL + "/analyse")
 
@@ -933,7 +942,7 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.assertEqual(self.driver.find_element("name", "password").get_attribute("type"), "password")
         github = self.driver.find_element("xpath", "//button[contains(., 'GitHub unavailable')]")
         self.assertFalse(github.is_enabled())
-        self.assertIn("no GitHub OAuth provider is configured", github.get_attribute("aria-label"))
+        self.assertIn("GitHub sign-in unavailable", github.get_attribute("aria-label"))
 
     def test_fixture_data_sources_navigation_contract_examples_and_roles(self):
         """Controlled UI fixture verifies visible API documentation and role boundaries."""
