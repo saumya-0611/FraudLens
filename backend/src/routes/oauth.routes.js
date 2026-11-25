@@ -17,6 +17,41 @@ const getClient = (provider) => provider.name === 'github' ? createGitHubClient(
 const statePattern = /^[A-Za-z0-9_-]{43}$/;
 const random = () => randomBytes(32).toString('base64url');
 const hash = (value) => createHash('sha256').update(value).digest('hex');
+const providerErrors = new Set([
+  'invalid_client', 'invalid_grant', 'invalid_request', 'invalid_scope', 'unauthorized_client',
+  'incorrect_client_credentials', 'redirect_uri_mismatch', 'bad_verification_code',
+  'incorrect_code_verifier', 'unverified_user_email', 'server_error', 'temporarily_unavailable',
+]);
+const verificationErrors = new Set([
+  'OAUTH_TIMEOUT', 'OAUTH_ABORT', 'OAUTH_INVALID_RESPONSE', 'OAUTH_RESPONSE_IS_NOT_JSON',
+  'OAUTH_RESPONSE_IS_NOT_CONFORM', 'OAUTH_JWT_CLAIM_COMPARISON_FAILED',
+  'OAUTH_JWT_TIMESTAMP_CHECK_FAILED', 'OAUTH_KEY_SELECTION_FAILED',
+  'GITHUB_CALLBACK_INVALID', 'GITHUB_TOKEN_REQUEST', 'GITHUB_TOKEN_RESPONSE',
+  'GITHUB_TOKEN_EXPIRY', 'GITHUB_TOKEN_SCOPE', 'GITHUB_TOKEN_FORMAT',
+  'GITHUB_USER_REQUEST', 'GITHUB_USER_RESPONSE', 'GITHUB_USER_ID',
+]);
+
+function failureReason(stage, error) {
+  if (stage === 'provider_verification') {
+    if (providerErrors.has(error?.error)) return error.error;
+    if (error?.code === 'OAUTH_JWT_CLAIM_COMPARISON_FAILED' && error.cause?.cause?.claim === 'nonce') {
+      return 'OIDC_NONCE_MISMATCH';
+    }
+    if (error?.code === 'OAUTH_INVALID_RESPONSE' && /^JWT "nonce".*claim missing$/.test(error.cause?.message ?? '')) {
+      return 'OIDC_NONCE_MISSING';
+    }
+    if (verificationErrors.has(error?.code)) return error.code;
+  }
+  if ((stage === 'attempt_lookup' || stage === 'identity_lookup') &&
+      typeof error?.code === 'string' && /^[0-9][0-9A-Z]{4}$/.test(error.code)) return error.code;
+  return 'unexpected_error';
+}
+
+function logCallbackFailure(req, provider, stage, reason) {
+  // The provider response can contain credentials and identity data. Log fixed codes only.
+  console.warn('[OAuth callback failed]', { provider: provider.name, stage, reason, requestId: req.id });
+}
+
 const startLimiter = rateLimit({
   windowMs: 60_000,
   limit: 20,
@@ -115,11 +150,13 @@ router.get('/:provider/callback', async (req, res) => {
   if (typeof proof !== 'string' || !statePattern.test(proof)) return result(res, 'state');
 
   let attempt;
+  let stage = 'attempt_lookup';
   try {
     attempt = await store.consumeAttempt(hash(state), hash(proof), provider.name);
     if (!attempt) return result(res, 'state');
     const linking = attempt.link_user_id !== null;
     if (linking) {
+      stage = 'link_session';
       const token = req.cookies?.fl_token;
       const user = await getSessionUser(req);
       if (typeof token !== 'string' || user?.id !== attempt.link_user_id ||
@@ -127,14 +164,21 @@ router.get('/:provider/callback', async (req, res) => {
     }
     if (error === 'access_denied' && code === undefined) return result(res, 'denied');
     if (error !== undefined || typeof code !== 'string' || !code || code.length > 4096 ||
-        (iss !== undefined && typeof iss !== 'string')) return result(res, 'provider');
+        (iss !== undefined && typeof iss !== 'string')) {
+      const reason = providerErrors.has(error) ? error : 'invalid_callback';
+      logCallbackFailure(req, provider, 'authorization_response', reason);
+      await record(req, provider, 'LOGIN_FAILURE', null, { stage: 'authorization_response', reason });
+      return result(res, 'provider');
+    }
 
+    stage = 'provider_verification';
     const callback = new URL(provider.redirectUri);
     callback.searchParams.set('state', state);
     callback.searchParams.set('code', code);
     if (iss !== undefined) callback.searchParams.set('iss', iss);
     const client = await getClient(provider);
     const identity = await client.verify(callback, { ...attempt, state });
+    stage = 'identity_lookup';
     const { kind, user } = await store.resolveIdentity(identity, attempt.link_user_id);
     if (kind === 'disabled' || kind === 'conflict') {
       await record(req, provider, 'LOGIN_FAILURE', null, { reason: kind });
@@ -145,11 +189,14 @@ router.get('/:provider/callback', async (req, res) => {
       return res.redirect(303, '/dashboard');
     }
     if (kind === 'registered') await record(req, provider, 'USER_CREATED', user, { provisioning: 'social' });
-    await record(req, provider, 'LOGIN_SUCCESS', user);
+    stage = 'session_issue';
     issueSession(res, user);
+    await record(req, provider, 'LOGIN_SUCCESS', user);
     return res.redirect(303, '/dashboard');
-  } catch {
-    if (attempt) await record(req, provider, 'LOGIN_FAILURE', null, { reason: provider.name === 'github' ? 'oauth_failure' : 'oidc_failure' });
+  } catch (failure) {
+    const reason = failureReason(stage, failure);
+    logCallbackFailure(req, provider, stage, reason);
+    if (attempt) await record(req, provider, 'LOGIN_FAILURE', null, { stage, reason });
     return result(res, 'provider');
   }
 });
