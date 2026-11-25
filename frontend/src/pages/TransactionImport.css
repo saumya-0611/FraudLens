@@ -1,0 +1,39 @@
+.import-panel { gap:17px; padding:22px; }
+.drop-zone { min-height:158px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:20px; color:var(--text-secondary); background:var(--bg-main); border:1px dashed var(--border-focus); border-radius:var(--radius-md); text-align:center; cursor:pointer; }
+.drop-zone>svg { color:var(--brand-primary); }
+.drop-zone>span { font-size:13px; font-weight:650; }
+.drop-zone small { color:var(--text-muted); font-size:10px; }
+.drop-zone input { max-width:250px; color:var(--text-muted); font-size:11px; }
+.drop-zone.dragging { background:color-mix(in srgb,var(--brand-primary) 10%,var(--bg-main)); border-style:solid; }
+.import-file-name { margin:0; color:var(--text-secondary); font-size:12px; overflow-wrap:anywhere; }
+.import-count { color:var(--text-muted); font-size:11px; }
+.mapping-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:11px; }
+.mapping-grid label { display:grid; gap:6px; color:var(--text-secondary); font-size:10px; font-weight:650; overflow-wrap:anywhere; }
+.mapping-grid select { width:100%; min-width:0; min-height:36px; padding:6px 8px; color:var(--text-primary); background:var(--bg-main); border:1px solid var(--border-default); border-radius:var(--radius-sm); }
+.required-label { margin-left:6px; color:var(--accent-warning); font-size:9px; }
+.import-preview-wrap { max-height:520px; }
+.import-preview-wrap table { min-width:1700px; }
+.import-preview-wrap th { position:sticky; top:0; z-index:1; background:var(--bg-elevated); }
+.import-preview-wrap td { vertical-align:top; }
+.import-preview-wrap td input { width:148px; min-height:34px; padding:6px 7px; color:var(--text-primary); background:var(--bg-main); border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:10px; }
+.import-preview-wrap td input:focus-visible,.mapping-grid select:focus-visible { outline:2px solid var(--border-focus); outline-offset:1px; }
+.unmapped-value { color:var(--text-muted); }
+.import-row-status { min-width:220px; max-width:300px; white-space:normal; }
+.row-errors { display:flex; align-items:flex-start; gap:5px; color:var(--accent-danger); font-size:10px; line-height:1.45; }
+.row-errors svg { flex:none; margin-top:1px; }
+.row-state { display:inline-flex; align-items:center; gap:5px; color:var(--text-muted); font-size:10px; }
+.row-state.scored { color:var(--accent-success); }
+.row-state.failed,.row-state.check_required { color:var(--accent-warning); }
+.import-row-status>small,.import-result-detail small { display:block; margin-top:5px; color:var(--text-muted); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+.import-result-detail { margin-top:6px; color:var(--text-secondary); font-size:10px; line-height:1.5; }
+.import-row-status .text-link { display:block; margin-top:5px; color:var(--brand-primary); font-size:10px; text-decoration:underline; }
+.import-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--text-muted); font-size:11px; }
+.import-actions>div { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.import-actions .button { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
+.import-progress { display:grid; gap:7px; color:var(--text-secondary); font-size:11px; }
+.import-progress progress { width:100%; accent-color:var(--brand-primary); }
+.button.danger { color:var(--accent-danger); border-color:color-mix(in srgb,var(--accent-danger) 40%,var(--border-default)); }
+
+@media(max-width:900px) { .mapping-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:650px) { .import-panel { padding:16px; }.mapping-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.import-actions { align-items:flex-start; flex-direction:column; }.import-actions>div { width:100%; justify-content:stretch; }.import-actions .button { flex:1; }.import-page>.page-heading { align-items:stretch; }.import-page>.page-heading>.button { width:100%; } }
+@media(max-width:360px) { .mapping-grid { grid-template-columns:1fr; }.drop-zone { padding:15px 10px; }.import-actions>div { flex-direction:column; } }

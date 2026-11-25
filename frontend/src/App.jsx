@@ -21,6 +21,8 @@ const Users = lazy(() => import("./pages/admin/Users"));
 const AuditLogs = lazy(() => import("./pages/admin/AuditLogs"));
 const Models = lazy(() => import("./pages/admin/Models"));
 const AnalyzeTransaction = lazy(() => import("./pages/AnalyzeTransaction"));
+const DataSources = lazy(() => import("./pages/DataSources"));
+const TransactionImport = lazy(() => import("./pages/TransactionImport"));
 
 import "./App.css";
 
@@ -219,6 +221,7 @@ function LoginPage() {
                                     type="text"
                                     placeholder="Enter your username"
                                     value={username}
+                                    required
                                     onChange={(event) =>
                                         setUsername(event.target.value)
                                     }
@@ -242,6 +245,7 @@ function LoginPage() {
                                         type={showPassword ? "text" : "password"}
                                         placeholder="Enter your password"
                                         value={password}
+                                        required
                                         onChange={(event) =>
                                             setPassword(event.target.value)
                                         }
@@ -259,6 +263,7 @@ function LoginPage() {
                                                 ? "Hide password"
                                                 : "Show password"
                                         }
+                                        aria-pressed={showPassword}
                                     >
                                         {showPassword ? "Hide" : "Show"}
                                     </button>
@@ -304,12 +309,16 @@ function LoginPage() {
                                 <span className="social-icon linkedin-icon" aria-hidden="true">in</span>
                                 {providers.linkedin ? "LinkedIn" : "LinkedIn unavailable"}
                             </button>
+                            <button type="button" disabled aria-label="GitHub sign-in unavailable because no GitHub OAuth provider is configured" title="GitHub OAuth is not configured for this project.">
+                                <span className="social-icon github-icon" aria-hidden="true">GH</span>
+                                GitHub unavailable
+                            </button>
                         </div>
 
                         <p className="account-note">
                             {providers.google || providers.linkedin
                                 ? "New social accounts start with Viewer access."
-                                : "Access is provided by your Fraud Lens administrator."}
+                                : "There is no public sign-up. Ask your FraudLens administrator to provision an account."}
                         </p>
                     </div>
 
@@ -350,6 +359,8 @@ function AppRoutes() {
                         path="/transactions"
                         element={<Transactions />}
                     />
+
+                    <Route path="/integrations" element={<DataSources />} />
 
                     {/* ADMIN and ANALYST only */}
                     <Route
@@ -399,6 +410,7 @@ function AppRoutes() {
                             path="/analyse"
                             element={<AnalyzeTransaction />}
                         />
+                        <Route path="/imports" element={<TransactionImport />} />
                     </Route>
                 </Route>
             </Route>

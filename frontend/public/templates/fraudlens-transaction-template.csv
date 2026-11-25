@@ -1,0 +1,3 @@
+transaction_id,account_ref,amount,tx_time,category,merchant,lat,lon,merch_lat,merch_lon,customer_age
+demo-tx-001,demo-account-1001,125.50,2026-11-20T03:12:45Z,shopping_net,Example Merchant,36.0788,-81.1781,36.011293,-82.048315,34
+demo-tx-002,demo-account-1002,42.00,2026-11-20T04:12:45Z,grocery_pos,Example Grocery,,,,,

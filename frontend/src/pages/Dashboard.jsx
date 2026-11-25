@@ -115,16 +115,16 @@ export default function Dashboard() {
           <p>Transaction activity and service health reported by the configured backend.</p>
         </div>
       </header>
-      <p className="dashboard-data-note" role="note">Service health below comes from the dashboard API and is separate from this browser’s connection. The configured backend may include seeded demonstration records.</p>
+      <p className="dashboard-data-note" role="note">{mockMode ? "The values and service indicators below are synthetic mock fixtures; they do not show connected PostgreSQL, Kafka, Spark, or ML services." : "Service health below comes from the dashboard API and is separate from this browser’s connection. The configured backend may include seeded demonstration records."}</p>
       {error && <ErrorState message={error} onRetry={refresh} />}
 
       <section className="status-strip" aria-label="System status">
         {serviceNames.map(name => {
           const serviceStatus = systems[name];
-          const statusLabel = serviceStatus === "UP" || serviceStatus === "DOWN" ? serviceStatus : "UNKNOWN";
+          const statusLabel = mockMode ? "SIMULATED" : serviceStatus === "UP" || serviceStatus === "DOWN" ? serviceStatus : "UNKNOWN";
           return (
             <div className="status-item" key={name}>
-              <i className={statusLabel === "UP" ? "online" : statusLabel === "DOWN" ? "offline" : ""} aria-hidden="true" />
+              <i className={statusLabel === "UP" ? "online" : statusLabel === "DOWN" ? "offline" : statusLabel === "SIMULATED" ? "simulated" : ""} aria-hidden="true" />
               <span>{name.replace("_", " ")}</span>
               <strong>{statusLabel}</strong>
             </div>
