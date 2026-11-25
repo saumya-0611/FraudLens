@@ -1,0 +1,13 @@
+# Security verification and evidence boundaries
+
+Authentication failures can arise in application logic, PostgreSQL concurrency, browser cookie handling, or the deployment proxy. FraudLens records the environment for each check so a fixture result does not become an unsupported hosted claim.
+
+| Evidence layer | What the repository records or exercises |
+| --- | --- |
+| Backend Jest | Real verifier, middleware and route code with controlled data and provider responses. Covers token validation, account lockout behavior, role denial, API constraints and audit mismatch handling. [Backend test directory](../../../backend/src/tests) |
+| Disposable PostgreSQL | Historical loopback verification exercised bcrypt, current roles and account status, concurrent login failures and audit appends. The recorded run verified 24 chained rows including 12 concurrent appends. [Historical report](../../../docs/test-reports/security-report.md) · [PostgreSQL harness](../../../security/verify-postgres.cjs) |
+| Local browser and HTTPS | The recorded Chrome run exercised login, logout and masked socket alerts. The separate local Nginx HTTPS fixture checked Secure, HttpOnly and SameSite attributes and trusted forwarding behavior. Alert data was synthetic. [Historical report](../../../docs/test-reports/security-report.md) · [Browser harness](../../../security/verify-browser.cjs) |
+| Provider fixtures | Controlled signed OIDC responses cover Google and LinkedIn. GitHub uses controlled token-exchange and user responses. These fixtures exercise verification and local permission behavior. [OIDC tests](../../../backend/src/tests/fixtures/oidc.node.cjs) · [GitHub tests](../../../backend/src/tests/githubOAuth.test.js) |
+| Team CI | The workflows cover backend, frontend, ML, and disposable scoring runtimes, plus dependency audit jobs. PR #9’s final CI and security workflows passed. [CI workflow](../../../.github/workflows/ci.yml) · [Security workflow](../../../.github/workflows/security-scan.yml) · [PR CI](https://github.com/saumya-0611/FraudLens/actions/runs/45608926694) · [PR security scans](https://github.com/saumya-0611/FraudLens/actions/runs/45608926586) |
+
+Shivansh recorded the Phase 2 evidence in `db56432` and added the pre-PR HTTPS verification in `d68f798`. Teammates own the broader ingestion, frontend, scoring and hosted environments. Historical counts apply to their recorded checkpoints. This documentation review added no new application test runs. Hosted OAuth consent, actual ingress behavior and production account lifecycle still need separate acceptance with approved credentials and isolated data. [Verification setup](../../../security/attack_tests/README.md) · [Capstone demo guide](../../../security/demo-guide.md)
