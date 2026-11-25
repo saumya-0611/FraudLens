@@ -25,7 +25,12 @@ async function getSessionUser(req) {
   if (user?.status !== 'ACTIVE' || !['ADMIN', 'ANALYST', 'VIEWER'].includes(user.role)) {
     return null;
   }
-  return { id: user.id, username: user.username, role: user.role };
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    ...(tokenUser.display_name ? { display_name: tokenUser.display_name } : {}),
+  };
 }
 
 async function authenticate(req, res, next) {

@@ -82,6 +82,8 @@ const navigation = [
 
 function DashboardLayout() {
     const { user, logout } = useAuth();
+    const username = user?.username ?? "";
+    const displayName = user?.display_name || (/^social-[a-f0-9]{32}$/.test(username) ? "Social account" : username);
     const navigate = useNavigate();
 
     const [menuOpen, setMenuOpen] = useState(false);
@@ -209,11 +211,11 @@ function DashboardLayout() {
 
                     <div className="sidebar-user">
                         <div className="user-avatar">
-                            {user?.username?.charAt(0).toUpperCase()}
+                            {Array.from(displayName)[0]?.toUpperCase()}
                         </div>
 
                         <div className="user-details">
-                            <strong>{user?.username}</strong>
+                            <strong className="break-words">{displayName}</strong>
                             <small>{user?.role}</small>
                         </div>
 

@@ -184,9 +184,10 @@ router.post('/logout', authenticate, async (req, res) => {
 
 // C3: GET /api/auth/me
 router.get('/me', authenticate, (req, res) => {
-  return res.status(200).json({
+  return res.set('Cache-Control', 'no-store').status(200).json({
     username: req.user.username,
     role: req.user.role,
+    ...(req.user.display_name ? { display_name: req.user.display_name } : {}),
   });
 });
 

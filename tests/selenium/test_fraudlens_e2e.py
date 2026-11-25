@@ -90,7 +90,7 @@ CONTROLLED_FIXTURE = r"""
     const url = new URL(typeof input === 'string' ? input : input.url, location.href);
     const method = (init.method || 'GET').toUpperCase();
     if (url.pathname === '/api/auth/me') return state.role
-      ? response({ username: 'fixture-user', role: state.role })
+      ? response({ username: 'fixture-user', role: state.role, ...JSON.parse(sessionStorage.getItem('fraudlens-fixture-profile') || '{}') })
       : response({ error: { code: 'UNAUTHENTICATED', message: 'Sign in required.' } }, 401);
     if (url.pathname === '/api/auth/providers') {
       const available = new URLSearchParams(location.search).get('fixtureProviders') === 'enabled';
@@ -102,7 +102,12 @@ CONTROLLED_FIXTURE = r"""
       sessionStorage.setItem('fraudlens-fixture-role', state.role);
       return response({ username: 'fixture-user', role: state.role, expires_in: 7200 });
     }
-    if (url.pathname === '/api/auth/logout') { state.role = null; sessionStorage.removeItem('fraudlens-fixture-role'); return response(null, 204); }
+    if (url.pathname === '/api/auth/logout') {
+      state.role = null;
+      sessionStorage.removeItem('fraudlens-fixture-role');
+      sessionStorage.removeItem('fraudlens-fixture-profile');
+      return response(null, 204);
+    }
     if (url.pathname === '/api/transactions' && method === 'POST' && location.pathname === '/imports') {
       state.batchPosts += 1;
       const imported = JSON.parse(init.body || '{}');
@@ -465,6 +470,26 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'nearest', behavior:'instant'})", element)
         element.click()
 
+    def test_fixture_social_profile_display_name_and_legacy_fallback(self):
+        """The dashboard shows the session display name and hides generated social usernames."""
+        self._require_fixture_browser()
+        self._fixture_login("VIEWER")
+        self.addCleanup(self._fixture_logout)
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        generated = "social-" + "a" * 32
+        for profile, expected in [
+            ({"username": generated, "display_name": "Fixture Profile"}, "Fixture Profile"),
+            ({"username": generated}, "Social account"),
+        ]:
+            self.driver.execute_script(
+                "sessionStorage.setItem('fraudlens-fixture-profile', JSON.stringify(arguments[0]))", profile
+            )
+            self.driver.refresh()
+            WebDriverWait(self.driver, 10).until(
+                lambda d: d.find_element("css selector", ".user-details strong").text == expected
+            )
+            self.assertEqual(self.driver.find_element("css selector", ".user-details small").text, "VIEWER")
     def test_fixture_manual_transaction_validation_ack_pending_result_reload_and_duplicate_guard(self):
         """Controlled fake API fixture; proves UI behavior, not backend scoring."""
         self._require_fixture_browser()

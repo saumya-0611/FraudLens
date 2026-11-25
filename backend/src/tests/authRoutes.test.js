@@ -252,6 +252,21 @@ describe('C3 authentication routes', () => {
     });
   });
 
+  test('GET /me returns a session display name without changing the local username or role', async () => {
+    const token = signToken({ ...user, display_name: '  Test\n  Person\u202e  ' });
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Cookie', `fl_token=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body).toEqual({
+      username: 'testuser',
+      role: 'ANALYST',
+      display_name: 'Test Person',
+    });
+  });
+
   test('logout clears cookie and returns 204', async () => {
     const token = signToken(user);
 

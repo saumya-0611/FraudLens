@@ -20,14 +20,18 @@ function config(name) {
   })[name];
 }
 
-async function fixture(name, changed = {}, key = signing.privateKey, acceptedCode = 'fixture-code', tokenFields = {}) {
+async function fixture(name, changed = {}, key = signing.privateKey, acceptedCode = 'fixture-code', tokenFields = {}, profile = null) {
   const provider = config(name);
   let attempt;
   let codeUsed = false;
   const requests = [];
-  const fetch = async (url, { body } = {}) => {
+  const fetch = async (url, { body, headers } = {}) => {
     const target = String(url);
     if (target.endsWith('/certs') || target.endsWith('/jwks')) return Response.json(jwks);
+    if (target === 'https://openidconnect.googleapis.com/v1/userinfo') {
+      assert.equal(new Headers(headers).get('authorization'), 'Bearer private-fixture');
+      return Response.json(profile, { status: profile ? 200 : 503 });
+    }
     assert(target.endsWith('/token') || target.endsWith('/accessToken'));
     const params = new URLSearchParams(body);
     requests.push(params);
@@ -53,6 +57,23 @@ async function fixture(name, changed = {}, key = signing.privateKey, acceptedCod
   callback.searchParams.set('code', 'fixture-code');
   return { client, attempt, callback, start, requests, provider };
 }
+
+test('uses the name claim from a verified Google ID token', async () => {
+  const { client, callback, attempt } = await fixture('google', { name: 'Test Person' });
+  assert.deepEqual(await client.verify(callback, attempt), {
+    issuer: issuers.google, subject: 'same-provider-fixture', displayName: 'Test Person',
+  });
+});
+
+test('Google profile fallback accepts only the signed token subject', async () => {
+  for (const sub of ['same-provider-fixture', 'other-subject']) {
+    const { client, callback, attempt } = await fixture(
+      'google', {}, signing.privateKey, 'fixture-code', {}, { sub, name: 'Test Profile' },
+    );
+    const identity = await client.verify(callback, attempt);
+    assert.equal(identity.displayName, sub === 'same-provider-fixture' ? 'Test Profile' : undefined);
+  }
+});
 
 for (const name of Object.keys(issuers)) {
   test(name + ' validates a signed provider identity and its declared PKCE support', async () => {
