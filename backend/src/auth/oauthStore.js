@@ -1,7 +1,7 @@
 const { randomBytes } = require('node:crypto');
 const { pool, query } = require('../config/db');
 
-async function ready() {
+async function ready(provider = null) {
   const { rows: [row] } = await query(
     `SELECT to_regclass('oauth_identities') IS NOT NULL
         AND to_regclass('oauth_attempts') IS NOT NULL
@@ -9,7 +9,13 @@ async function ready() {
           SELECT 1 FROM pg_attribute
           WHERE attrelid = to_regclass('users') AND attname = 'password_hash'
             AND NOT attnotnull AND NOT attisdropped
-        ) AS ready`
+        )
+        AND ($1::text IS DISTINCT FROM 'github' OR EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = to_regclass('oauth_attempts')
+            AND conname = 'oauth_attempts_provider_protocol_check' AND convalidated
+        )) AS ready`,
+    [provider]
   );
   return row?.ready === true;
 }
