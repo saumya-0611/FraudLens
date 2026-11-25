@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Download } from "lucide-react";
 import { request } from "../services/api";
 import { errorMessage, localTime } from "../services/format";
+import { downloadCsv, transactionsToCsv } from "../services/csvExport";
 import { Empty, ErrorState, Loading, Modal, RiskBadge } from "../components/PageState";
 import { useAuth } from "../hooks/useAuth";
 
@@ -18,10 +20,13 @@ export default function Transactions() {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
+  const [selectedRows, setSelectedRows] = useState(() => new Map());
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState("");
   const { user } = useAuth();
 
-  const load = useCallback(() => {
-    const search = new URLSearchParams({ page: String(page), page_size: "20" });
+  const queryParams = useCallback((requestedPage, pageSize = 20) => {
+    const search = new URLSearchParams({ page: String(requestedPage), page_size: String(pageSize) });
     if (risk) search.set("risk", risk);
     if (query) {
       const maskedAccount = query.trim().match(/^x{4}[-\s]?(\d{4})$/i);
@@ -29,11 +34,15 @@ export default function Transactions() {
     }
     if (from) search.set("from", new Date(from).toISOString());
     if (to) search.set("to", new Date(`${to}T23:59:59.999`).toISOString());
+    return search;
+  }, [risk, query, from, to]);
 
+  const load = useCallback(() => {
+    const search = queryParams(page);
     return request(`/api/transactions?${search}`)
       .then(result => { setData(result); setError(""); })
       .catch(requestError => setError(errorMessage(requestError, "Could not load transactions.")));
-  }, [page, risk, query, from, to]);
+  }, [page, queryParams]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -58,6 +67,49 @@ export default function Transactions() {
     setDetail(null);
     setParams({});
   };
+
+  function toggleSelected(row, checked) {
+    setSelectedRows(current => {
+      const next = new Map(current);
+      if (checked) next.set(row.transaction_id, row);
+      else next.delete(row.transaction_id);
+      return next;
+    });
+  }
+
+  function exportSelected() {
+    if (!selectedRows.size) return;
+    downloadCsv("fraudlens-selected-transactions.csv", transactionsToCsv([...selectedRows.values()]));
+    setExportMessage(`Exported ${selectedRows.size} selected transaction${selectedRows.size === 1 ? "" : "s"}.`);
+  }
+
+  async function exportFiltered() {
+    setExporting(true);
+    setExportMessage("");
+    try {
+      const first = await request(`/api/transactions?${queryParams(1, 100)}`);
+      if (!Array.isArray(first?.items) || !Number.isFinite(Number(first.total))) throw new Error("The API returned an unexpected paginated transaction response.");
+      const total = Math.max(0, Number(first.total));
+      const cap = 10000;
+      const pageCount = Math.min(Math.ceil(total / 100), cap / 100);
+      const items = [...first.items];
+      for (let currentPage = 2; currentPage <= pageCount; currentPage += 1) {
+        const result = await request(`/api/transactions?${queryParams(currentPage, 100)}`);
+        if (!Array.isArray(result?.items)) throw new Error(`The API returned an invalid response on page ${currentPage}.`);
+        items.push(...result.items);
+      }
+      if (!items.length) {
+        setExportMessage("There are no filtered transactions to export.");
+        return;
+      }
+      downloadCsv("fraudlens-filtered-transactions.csv", transactionsToCsv(items));
+      setExportMessage(items.length < total ? `Exported ${items.length} of ${total} filtered transactions (export limit: 10,000).` : `Exported ${items.length} filtered transactions across ${pageCount} API page${pageCount === 1 ? "" : "s"}.`);
+    } catch (requestError) {
+      setExportMessage(errorMessage(requestError, "Could not export filtered transactions."));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (!data && !error) return <Loading label="Loading transactions…" />;
 
@@ -86,15 +138,18 @@ export default function Transactions() {
         <button className="button secondary" onClick={load}>Refresh</button>
       </section>
 
+      <div className="transaction-export-bar"><span>{selectedRows.size} selected from loaded pages</span><div><button type="button" className="button secondary" disabled={!selectedRows.size} onClick={exportSelected}><Download size={15} /> Export selected</button><button type="button" className="button secondary" disabled={exporting || Boolean(error)} onClick={() => void exportFiltered()}><Download size={15} /> {exporting ? "Preparing export…" : "Export filtered results"}</button></div></div>
+      {exportMessage && <p className="dashboard-data-note" role="status">{exportMessage}</p>}
+
       {error ? <ErrorState message={error} onRetry={load} /> : data?.items?.length ? (
         <>
           <div className="table-wrap panel">
             <table>
-              <thead><tr><th>Time</th><th>Account / transaction</th><th>Amount</th><th>Category</th><th>Merchant</th><th>Risk</th><th>Fraud score</th></tr></thead>
+              <thead><tr><th><span className="sr-only">Select</span></th><th>Time</th><th>Account / transaction</th><th>Amount</th><th>Category</th><th>Merchant</th><th>Risk</th><th>Fraud score</th></tr></thead>
               <tbody>
                 {data.items.map(row => (
                   <tr key={row.transaction_id} tabIndex="0" onClick={() => openDetail(row.transaction_id)} onKeyDown={event => event.key === "Enter" && openDetail(row.transaction_id)}>
-                    <td>{localTime(row.tx_time)}</td><td>{row.account_masked}<small className="cell-sub">{row.transaction_id}</small></td><td>{Number(row.amount).toFixed(2)}</td>
+                    <td><input type="checkbox" aria-label={`Select transaction ${row.transaction_id} for export`} checked={selectedRows.has(row.transaction_id)} onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()} onChange={event => toggleSelected(row, event.target.checked)} /></td><td>{localTime(row.tx_time)}</td><td>{row.account_masked}<small className="cell-sub">{row.transaction_id}</small></td><td>{Number(row.amount).toFixed(2)}</td>
                     <td>{row.category}</td><td>{row.merchant || "—"}</td><td><RiskBadge value={row.risk_category} /></td>
                     <td>{row.fraud_probability == null ? "—" : `${(row.fraud_probability * 100).toFixed(1)}%`}</td>
                   </tr>

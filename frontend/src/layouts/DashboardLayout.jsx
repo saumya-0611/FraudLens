@@ -9,6 +9,8 @@ import {
     ScrollText,
     BrainCircuit,
     ScanSearch,
+    Database,
+    FileUp,
     LogOut,
     ShieldCheck,
     Activity,
@@ -32,6 +34,12 @@ const navigation = [
         label: "Transactions",
         path: "/transactions",
         icon: ArrowLeftRight,
+        roles: ["ADMIN", "ANALYST", "VIEWER"],
+    },
+    {
+        label: "Data sources",
+        path: "/integrations",
+        icon: Database,
         roles: ["ADMIN", "ANALYST", "VIEWER"],
     },
     {
@@ -62,6 +70,12 @@ const navigation = [
         label: "Analyse Transaction",
         path: "/analyse",
         icon: ScanSearch,
+        roles: ["ADMIN"],
+    },
+    {
+        label: "Import transactions",
+        path: "/imports",
+        icon: FileUp,
         roles: ["ADMIN"],
     },
 ];
@@ -173,8 +187,8 @@ function DashboardLayout() {
                         <span className={`status-dot ${mockMode ? "status-mock" : alertsLive ? "online" : "offline"}`} />
 
                         <div>
-                            <strong>Live alerts</strong>
-                            <small>{mockMode ? "Disabled in mock mode" : alertSocketStatus}</small>
+                            <strong>Alert delivery</strong>
+                            <small>{mockMode ? "Simulated mode — not connected" : alertSocketStatus}</small>
                         </div>
                     </div>
 

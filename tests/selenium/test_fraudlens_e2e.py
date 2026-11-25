@@ -13,6 +13,7 @@ headless CI stage, includes a deterministic DOM/contract smoke mode so CI never 
 """
 import importlib
 import os
+import tempfile
 import time
 import unittest
 from urllib.parse import urlparse
@@ -60,6 +61,7 @@ CONTROLLED_FIXTURE = r"""
   const state = window.__fraudLensFixture = {
     role: sessionStorage.getItem('fraudlens-fixture-role'),
     transaction: JSON.parse(sessionStorage.getItem('fraudlens-fixture-transaction') || 'null'),
+    batchTransactions: JSON.parse(sessionStorage.getItem('fraudlens-fixture-batch-transactions') || '{}'), batchPosts: 0, batchPollReads: {},
     detailReads: 0, transactionPosts: 0, alertRequests: 0,
     alertFailure: new URLSearchParams(location.search).get('fixtureAlertFailure') === '1',
     alertConflict: new URLSearchParams(location.search).get('fixtureAlertConflict') === '1',
@@ -99,6 +101,16 @@ CONTROLLED_FIXTURE = r"""
       return response({ username: 'fixture-user', role: state.role, expires_in: 7200 });
     }
     if (url.pathname === '/api/auth/logout') { state.role = null; sessionStorage.removeItem('fraudlens-fixture-role'); return response(null, 204); }
+    if (url.pathname === '/api/transactions' && method === 'POST' && location.pathname === '/imports') {
+      state.batchPosts += 1;
+      const imported = JSON.parse(init.body || '{}');
+      if (Number(imported.amount) === 999) {
+        return response({ error: { code: 'VALIDATION_ERROR', message: 'Fixture row rejected.' } }, 400);
+      }
+      state.batchTransactions[imported.transaction_id] = imported;
+      sessionStorage.setItem('fraudlens-fixture-batch-transactions', JSON.stringify(state.batchTransactions));
+      return response({ transaction_id: imported.transaction_id, status: 'ACCEPTED' }, 202);
+    }
     if (url.pathname === '/api/transactions' && method === 'POST') {
       state.transactionPosts += 1;
       state.transaction = JSON.parse(init.body || '{}'); sessionStorage.setItem('fraudlens-fixture-transaction', JSON.stringify(state.transaction)); state.detailReads = 0;
@@ -106,6 +118,12 @@ CONTROLLED_FIXTURE = r"""
     }
     if (url.pathname.startsWith('/api/transactions/')) {
       const id = decodeURIComponent(url.pathname.split('/').pop());
+      if (state.batchTransactions[id]) {
+        state.batchPollReads[id] = (state.batchPollReads[id] || 0) + 1;
+        if (state.batchPollReads[id] < 2) return response({ transaction_id: id, risk_category: 'PENDING', fraud_probability: null, is_anomaly: null, model_version: null });
+        const imported = state.batchTransactions[id];
+        return response({ transaction_id: id, account_masked: 'XXXX-4242', amount: imported.amount, category: imported.category, risk_category: 'SUSPICIOUS', fraud_probability: 0.41, anomaly_score: 0.2, is_anomaly: false, model_version: 'fixture-v1', scored_at: '2026-11-24T00:00:00Z', top_reasons: [{ feature: 'amount_ratio', impact: 0.2, text: 'Controlled fixture explanation' }], features: {}, alert: null });
+      }
       if (state.transaction && state.transaction.transaction_id === id) {
         state.detailReads += 1;
         const tx = state.transaction;
@@ -243,6 +261,10 @@ def _create_headless_driver():
     browser_binary = os.getenv("CHROME_BINARY")
     if browser_binary:
         options.binary_location = browser_binary
+    driver_binary = os.getenv("CHROMEDRIVER_BINARY")
+    if driver_binary:
+        service_mod = importlib.import_module("selenium.webdriver.chrome.service")
+        return webdriver.Chrome(service=service_mod.Service(executable_path=driver_binary), options=options)
     return webdriver.Chrome(options=options)
 
 
@@ -254,6 +276,7 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         cls.driver = None
         cls.live_server_reachable = False
         cls.fixture_script_registered = False
+        cls.tests_on_browser = 0
         try:
             import httpx
 
@@ -272,11 +295,44 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if cls.driver is not None:
-            cls.driver.quit()
+            try:
+                cls.driver.quit()
+            except Exception:
+                pass
+
+    def setUp(self):
+        cls = self.__class__
+        restart = cls.tests_on_browser >= 4
+        if cls.driver is not None:
+            try:
+                cls.driver.execute_script("return document.readyState")
+            except Exception:
+                restart = True
+        if restart:
+            try:
+                cls.driver.quit()
+            except Exception:
+                pass
+            cls.driver = None
+            cls.fixture_script_registered = False
+            cls.tests_on_browser = 0
+        if cls.driver is None and cls.live_server_reachable:
+            try:
+                cls.driver = _create_headless_driver()
+                cls.driver.implicitly_wait(5)
+            except Exception:
+                cls.driver = None
+        self.driver = cls.driver
+        if self.driver is not None:
+            cls.tests_on_browser += 1
 
     def tearDown(self):
         if self.driver is not None:
-            self.driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+            try:
+                self.driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+            except Exception:
+                self.__class__.driver = None
+                self.__class__.fixture_script_registered = False
 
     def test_01_login_page_renders_brand_and_form(self):
         """Verify FraudLens login page loads brand header, username/password fields, and submit button."""
@@ -338,11 +394,33 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
     def _require_fixture_browser(self):
         if not FIXTURE_MODE:
             self.skipTest("Set FRAUDLENS_E2E_MODE=fixture to run isolated browser fixtures.")
+        if self.driver is None and self.__class__.live_server_reachable:
+            self._restart_fixture_browser()
         if self.driver is None:
             self.skipTest("Python Selenium/Chrome or the local frontend is unavailable.")
         if not self.__class__.fixture_script_registered:
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CONTROLLED_FIXTURE})
             self.__class__.fixture_script_registered = True
+
+    def _restart_fixture_browser(self):
+        """Recover a browser process that Chrome closed between fixture tests."""
+        cls = self.__class__
+        if cls.driver is not None:
+            try:
+                cls.driver.quit()
+            except Exception:
+                pass
+        cls.driver = None
+        cls.fixture_script_registered = False
+        try:
+            cls.driver = _create_headless_driver()
+            cls.driver.implicitly_wait(5)
+        except Exception:
+            cls.driver = None
+        self.driver = cls.driver
+        if self.driver is not None:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": CONTROLLED_FIXTURE})
+            cls.fixture_script_registered = True
 
     def _fixture_login(self, role):
         self._fixture_logout()
@@ -357,12 +435,16 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
 
     def _fixture_logout(self):
         from selenium.webdriver.support.ui import WebDriverWait
-        self.driver.get(FRONTEND_URL + "/dashboard")
-        WebDriverWait(self.driver, 10).until(lambda d: d.find_elements("css selector", "button.sidebar-utility") or d.find_elements("css selector", "input[name='username']"))
-        logout = self.driver.find_elements("css selector", "button.sidebar-utility")
-        if logout:
-            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click()", logout[0])
-            WebDriverWait(self.driver, 10).until(lambda d: d.find_elements("css selector", "input[name='username']"))
+        try:
+            self.driver.get(FRONTEND_URL + "/dashboard")
+            WebDriverWait(self.driver, 10).until(lambda d: d.find_elements("css selector", "button.sidebar-utility") or d.find_elements("css selector", "input[name='username']"))
+            logout = self.driver.find_elements("css selector", "button.sidebar-utility")
+            if logout:
+                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click()", logout[0])
+                WebDriverWait(self.driver, 10).until(lambda d: d.find_elements("css selector", "input[name='username']"))
+        except Exception:
+            # A fresh headless Chrome session has no fixture login cookie or state.
+            self._restart_fixture_browser()
 
     def _click_visible(self, selector):
         strategy = "xpath" if selector.startswith("//") else "css selector"
@@ -427,7 +509,7 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         for role in ("ANALYST", "VIEWER"):
             with self.subTest(role=role):
                 self._fixture_login(role)
-                denied_routes = ["/analyse", "/admin/users", "/admin/audit-logs", "/admin/models"]
+                denied_routes = ["/analyse", "/imports", "/admin/users", "/admin/audit-logs", "/admin/models"]
                 if role == "VIEWER":
                     denied_routes.append("/alerts")
                 for route in denied_routes:
@@ -439,6 +521,8 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
                 self.driver.get(FRONTEND_URL + "/transactions")
                 WebDriverWait(self.driver, 10).until(lambda d: "Transactions" in d.page_source)
                 self.assertNotIn("Not allowed", self.driver.page_source)
+                self.driver.get(FRONTEND_URL + "/integrations")
+                WebDriverWait(self.driver, 10).until(lambda d: "Data sources & integrations" in d.find_element("tag name", "body").text)
                 if role == "ANALYST":
                     self.driver.get(FRONTEND_URL + "/alerts")
                     WebDriverWait(self.driver, 10).until(lambda d: "Fraud alerts" in d.page_source)
@@ -744,12 +828,13 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.driver.get(FRONTEND_URL + "/?fixtureProviders=enabled")
         WebDriverWait(self.driver, 10).until(lambda d: "Google" in d.page_source and "LinkedIn" in d.page_source)
         providers = self.driver.find_elements("css selector", ".social-grid button")
-        self.assertEqual(len(providers), 2)
-        self.assertTrue(all(button.is_enabled() for button in providers))
+        self.assertEqual(len(providers), 3)
+        self.assertTrue(all(button.is_enabled() for button in providers[:2]))
+        self.assertFalse(providers[2].is_enabled(), "GitHub must remain unavailable without a configured provider.")
         self.driver.get(FRONTEND_URL + "/")
         WebDriverWait(self.driver, 10).until(lambda d: "unavailable" in d.page_source.lower())
         providers = self.driver.find_elements("css selector", ".social-grid button")
-        self.assertEqual(len(providers), 2)
+        self.assertEqual(len(providers), 3)
         self.assertTrue(all(not button.is_enabled() for button in providers))
 
         self._fixture_login("ADMIN")
@@ -760,6 +845,92 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         WebDriverWait(self.driver, 10).until(lambda d: d.find_elements("css selector", "input[name='username']"))
         self.assertNotIn("User management", self.driver.page_source)
 
+    def test_fixture_login_password_visibility_and_provider_state(self):
+        """Controlled auth-provider endpoint; GitHub is a disabled placeholder."""
+        self._require_fixture_browser()
+        from selenium.webdriver.support.ui import WebDriverWait
+        self._fixture_logout()
+        self.driver.get(FRONTEND_URL + "/?fixtureProviders=enabled")
+        WebDriverWait(self.driver, 10).until(lambda d: "Google" in d.page_source and "LinkedIn" in d.page_source)
+        password = self.driver.find_element("name", "password")
+        self.assertEqual(password.get_attribute("type"), "password")
+        self._click_visible("button[aria-label='Show password']")
+        self.assertEqual(self.driver.find_element("name", "password").get_attribute("type"), "text")
+        self._click_visible("button[aria-label='Hide password']")
+        self.assertEqual(self.driver.find_element("name", "password").get_attribute("type"), "password")
+        github = self.driver.find_element("xpath", "//button[contains(., 'GitHub unavailable')]")
+        self.assertFalse(github.is_enabled())
+        self.assertIn("no GitHub OAuth provider is configured", github.get_attribute("aria-label"))
+
+    def test_fixture_data_sources_navigation_contract_examples_and_roles(self):
+        """Controlled UI fixture verifies visible API documentation and role boundaries."""
+        self._require_fixture_browser()
+        from selenium.webdriver.support.ui import WebDriverWait
+        self._fixture_login("ANALYST")
+        self.driver.get(FRONTEND_URL + "/integrations")
+        WebDriverWait(self.driver, 10).until(lambda d: "Data sources & integrations" in d.find_element("tag name", "body").text)
+        self.assertIn("POST", self.driver.page_source)
+        self.assertIn("202 Accepted", self.driver.page_source)
+        self.assertIn("credentials: \"include\"", self.driver.page_source)
+        self.assertIn("X-Service-Token", self.driver.page_source)
+        self.assertTrue(self.driver.find_element("css selector", "a[href='/api-docs']").is_displayed())
+        self.assertFalse(self.driver.find_elements("css selector", "a[href='/imports']"))
+        self.driver.get(FRONTEND_URL + "/imports")
+        WebDriverWait(self.driver, 10).until(lambda d: "Not allowed" in d.page_source)
+        self.assertIn("Not allowed", self.driver.page_source)
+        self._fixture_logout()
+
+    def test_fixture_csv_import_validation_batch_partial_results_reload_and_duplicates(self):
+        """Controlled APIs exercise CSV import only; no real transaction writes occur."""
+        self._require_fixture_browser()
+        self._fixture_login("ADMIN")
+        from selenium.webdriver.support.ui import WebDriverWait
+        csv_text = (
+            "transaction_id,account_ref,amount,tx_time,category,merchant\n"
+            "fixture-batch-good-001,synthetic-account-4242,10.50,2026-11-20T03:12:45Z,shopping_net,Fixture merchant\n"
+            "fixture-batch-bad-002,synthetic-account-5252,999,2026-11-20T04:12:45Z,grocery_pos,Fixture market\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="fraudlens-qa-") as directory:
+            import pathlib
+            csv_path = pathlib.Path(directory) / "synthetic-batch.csv"
+            csv_path.write_text(csv_text, encoding="utf-8")
+            self.driver.get(FRONTEND_URL + "/imports")
+            self.driver.find_element("css selector", "input[type='file']").send_keys(str(csv_path))
+            WebDriverWait(self.driver, 10).until(lambda d: "2 rows" in d.page_source)
+            self.assertIn("fixture-batch-good-001", self.driver.page_source)
+            self.assertIn("2 valid", self.driver.page_source)
+            self._click_visible(".import-actions button.primary")
+            WebDriverWait(self.driver, 5).until(lambda d: d.find_elements("css selector", "[role='dialog']"))
+            self._click_visible("[role='dialog'] button.primary")
+            WebDriverWait(self.driver, 30).until(lambda d: "Batch results:" in d.page_source and "1 scored" in d.page_source and "1 failed or duplicate" in d.page_source)
+            self.assertEqual(self.driver.execute_script("return window.__fraudLensFixture.batchPosts"), 2)
+            self.assertIn("SUSPICIOUS · 41.0%", self.driver.page_source)
+            self.assertIn("XXXX-4242", self.driver.page_source)
+            self.assertIn("batch=", self.driver.current_url)
+
+            self.driver.refresh()
+            WebDriverWait(self.driver, 10).until(lambda d: "Restored batch references" in d.page_source)
+            self.assertIn("fixture-batch-good-001", self.driver.page_source)
+            self.assertIn("fixture-batch-bad-002", self.driver.page_source)
+
+            self.driver.find_element("css selector", "input[type='file']").send_keys(str(csv_path))
+            WebDriverWait(self.driver, 10).until(lambda d: "saved browser batch" in d.page_source)
+            self.assertFalse(self.driver.find_element("css selector", ".import-actions button.primary").is_enabled())
+
+    def test_fixture_integrations_and_import_mobile_layout(self):
+        """Controlled contract UI fits the required desktop, tablet and phone widths."""
+        self._require_fixture_browser()
+        self._fixture_login("ADMIN")
+        from selenium.webdriver.support.ui import WebDriverWait
+        for width in (1440, 1024, 768, 390, 320):
+            self.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {"width": width, "height": 900, "deviceScaleFactor": 1, "mobile": width <= 390})
+            for route, heading in (("/integrations", "Data sources & integrations"), ("/imports", "Import transactions")):
+                with self.subTest(width=width, route=route):
+                    self.driver.get(FRONTEND_URL + route)
+                    WebDriverWait(self.driver, 10).until(lambda d, title=heading: title in d.find_element("tag name", "body").text)
+                    dimensions = self.driver.execute_script("return {client:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}")
+                    self.assertLessEqual(dimensions["scroll"], dimensions["client"] + 1, f"{route} overflows at {width}px: {dimensions}")
+
     def test_fixture_admin_pages_mobile_layout_and_table_scrolling(self):
         """Controlled fixtures verify admin screen shells fit five target viewport widths."""
         self._require_fixture_browser()
@@ -767,6 +938,7 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         from selenium.webdriver.support.ui import WebDriverWait
         routes = [
             ("/transactions", "Transactions"), ("/alerts", "Fraud alerts"),
+            ("/integrations", "Data sources & integrations"), ("/imports", "Import transactions"),
             ("/admin/users", "User management"), ("/admin/audit-logs", "Audit logs"),
             ("/admin/models", "Model management"),
         ]
@@ -775,7 +947,7 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
             for route, heading in routes:
                 with self.subTest(viewport=width, route=route):
                     self.driver.get(FRONTEND_URL + route)
-                    WebDriverWait(self.driver, 10).until(lambda d, expected=heading: expected in d.page_source)
+                    WebDriverWait(self.driver, 10).until(lambda d, expected=heading: expected in d.find_element("tag name", "body").text)
                     layout = self.driver.execute_script("""return {
                       width: innerWidth, client: document.documentElement.clientWidth,
                       scroll: document.documentElement.scrollWidth,
@@ -788,7 +960,8 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
                     if width <= 800:
                         menu = self.driver.find_element("css selector", ".mobile-menu-button")
                         self.assertTrue(menu.is_displayed(), f"Mobile navigation missing for {route} at {width}px")
-                        self.assertTrue(layout["tableViewport"], f"No scrollable table wrapper for {route}")
+                        if route not in ("/integrations", "/imports"):
+                            self.assertTrue(layout["tableViewport"], f"No scrollable table wrapper for {route}")
                         self.assertTrue(all(view["scroll"] >= view["client"] for view in layout["tableViewport"]))
 
     def test_real_manual_transaction_requires_explicit_disposable_loopback(self):

@@ -1,0 +1,4 @@
+transaction_id,account_ref,amount,tx_time,category,merchant,lat,lon,merch_lat,merch_lon,customer_age
+sample-synthetic-001,synthetic-account-2401,89.99,2026-11-20T15:12:45Z,shopping_pos,Sample Book Shop,37.7749,-122.4194,37.7841,-122.4098,29
+sample-synthetic-002,synthetic-account-2402,640.00,2026-11-20T02:48:10Z,shopping_net,Sample Online Store,40.7128,-74.0060,40.7306,-73.9352,42
+sample-synthetic-003,synthetic-account-2401,18.20,2026-11-20T17:01:05Z,grocery_pos,Sample Market,,,,,29
