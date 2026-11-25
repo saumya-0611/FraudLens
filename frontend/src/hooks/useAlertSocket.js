@@ -105,6 +105,12 @@ export function useAlertSocket({ enabled, role, onAlert }) {
       socket.onmessage = event => {
         try {
           const message = JSON.parse(event.data);
+          if (message.type === "READY") {
+            wsFailures = 0;
+            delay = 1000;
+            setStatus("Live WebSocket");
+            return;
+          }
           if (message.type !== "NEW_ALERT" || !message.alert) return;
           wsFailures = 0;
           delay = 1000;

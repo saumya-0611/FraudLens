@@ -53,6 +53,20 @@ describe('WebSocket Alert Socket Tests', () => {
     });
   });
 
+  test('sends an authenticated-ready frame only after validating the session', async () => {
+    const client = connect({ origin: localOrigin, headers: { cookie: sessionCookie('ANALYST') } });
+    try {
+      const framePromise = once(client, 'message');
+      await once(client, 'open');
+      const [frame] = await framePromise;
+      expect(JSON.parse(frame.toString())).toEqual({ type: 'READY' });
+      const [accepted] = getWebSocketServer().clients;
+      expect(await accepted.sessionReady).toMatchObject({ role: 'ANALYST' });
+    } finally {
+      client.terminate();
+    }
+  });
+
   test('rejects unauthenticated client with 4401 Unauthorized code', (done) => {
     const client = new WebSocket(`ws://127.0.0.1:${port}/ws/alerts`, { origin: localOrigin });
 
@@ -79,7 +93,7 @@ describe('WebSocket Alert Socket Tests', () => {
     try {
       await once(client, 'open');
       const [accepted] = getWebSocketServer().clients;
-      expect(await accepted.sessionReady).toBe(true);
+      expect(await accepted.sessionReady).toMatchObject({ role: 'VIEWER' });
     } finally {
       client.terminate();
     }
@@ -120,7 +134,9 @@ describe('WebSocket Alert Socket Tests', () => {
       headers: { cookie: sessionCookie('VIEWER') },
     });
     const received = jest.fn();
-    client.on('message', received);
+    client.on('message', (data) => {
+      if (JSON.parse(data.toString()).type === 'NEW_ALERT') received();
+    });
     const closed = new Promise((resolve) => client.once('close', resolve));
     const viewer = users.find(({ role }) => role === 'VIEWER');
     try {
@@ -135,6 +151,26 @@ describe('WebSocket Alert Socket Tests', () => {
       expect(received).not.toHaveBeenCalled();
     } finally {
       viewer.status = 'ACTIVE';
+      client.terminate();
+    }
+  });
+
+  test('disconnects a socket when the authenticated role changes', async () => {
+    const client = connect({ origin: localOrigin, headers: { cookie: sessionCookie('VIEWER') } });
+    const viewer = users.find(({ role }) => role === 'VIEWER');
+    const originalRole = viewer.role;
+    try {
+      const framePromise = once(client, 'message');
+      await once(client, 'open');
+      await framePromise; // authenticated READY
+      const closed = once(client, 'close');
+      viewer.role = 'ANALYST';
+      await broadcastAlert({ alert_id: 991 });
+      const [code, reason] = await closed;
+      expect(code).toBe(4403);
+      expect(reason.toString()).toBe('Session changed');
+    } finally {
+      viewer.role = originalRole;
       client.terminate();
     }
   });
@@ -186,6 +222,7 @@ describe('WebSocket Alert Socket Tests', () => {
 
     client.on('message', (data) => {
       const parsed = JSON.parse(data.toString());
+      if (parsed.type === 'READY') return;
       expect(parsed).toEqual({
         type: 'NEW_ALERT',
         alert: testAlert,
@@ -249,6 +286,7 @@ describe('WebSocket Alert Socket Tests', () => {
 
     client.on('message', (data) => {
       const parsed = JSON.parse(data.toString());
+      if (parsed.type === 'READY') return;
       expect(parsed.type).toBe('NEW_ALERT');
       expect(parsed.alert.account_ref).toBeUndefined();
       expect(parsed.alert.details.account_ref).toBeUndefined();

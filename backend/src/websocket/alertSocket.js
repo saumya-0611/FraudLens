@@ -53,7 +53,12 @@ function initAlertSocket(server) {
     });
 
     ws.sessionRequest = { headers: { cookie: req.headers.cookie } };
-    ws.sessionReady = checkSession(ws);
+    ws.sessionReady = checkSession(ws).then((user) => {
+      if (user) {
+        ws.send(JSON.stringify({ type: 'READY' }));
+      }
+      return user;
+    });
     ws.isAlive = true;
 
     ws.on('pong', () => {
@@ -65,10 +70,11 @@ function initAlertSocket(server) {
   // Keep-alive heartbeat: ping every 30 seconds
   const heartbeat = setInterval(() => {
     if (!wss) return;
-    wss.clients.forEach((ws) => {
+    wss.clients.forEach(async (ws) => {
       if (ws.isAlive === false) {
         return ws.terminate();
       }
+      if (!await checkSession(ws)) return;
       ws.isAlive = false;
       try {
         ws.ping();
@@ -88,13 +94,23 @@ function initAlertSocket(server) {
 
 async function checkSession(ws) {
   try {
-    if (await getSessionUser(ws.sessionRequest)) return true;
-    ws.close(4401, 'Unauthorized');
+    const user = await getSessionUser(ws.sessionRequest);
+    if (!user) {
+      ws.close(4401, 'Unauthorized');
+      return null;
+    }
+    if (ws.authenticatedUser &&
+        (String(ws.authenticatedUser.id) !== String(user.id) || ws.authenticatedUser.role !== user.role)) {
+      ws.close(4403, 'Session changed');
+      return null;
+    }
+    ws.authenticatedUser = user;
+    return user;
   } catch (error) {
     console.error('[AlertSocket] Session check failed:', error.message);
     ws.close(1011, 'Session check failed');
   }
-  return false;
+  return null;
 }
 
 /**

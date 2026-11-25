@@ -215,6 +215,9 @@ CONTROLLED_FIXTURE = r"""
       setTimeout(() => {
         if (state.socketFailures > 0) { state.socketFailures -= 1; this.readyState = 3; this.onclose?.({ code: 1006 }); return; }
         this.readyState = 1; this.onopen?.();
+        if (new URL(location.href).searchParams.get('fixtureSocketReady') === '1') {
+          this.onmessage?.({ data: JSON.stringify({ type: 'READY' }) });
+        }
       }, 0);
     }
     close() { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({ code: 1000 }); }
@@ -237,6 +240,9 @@ def _create_headless_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1440,900")
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
+    browser_binary = os.getenv("CHROME_BINARY")
+    if browser_binary:
+        options.binary_location = browser_binary
     return webdriver.Chrome(options=options)
 
 
@@ -449,7 +455,8 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.assertIn("Real-Time Financial", self.driver.page_source)
         self.driver.find_element("css selector", ".landing-login").click()
         from selenium.webdriver.support.ui import WebDriverWait
-        WebDriverWait(self.driver, 10).until(lambda d: d.current_url.rstrip("/").endswith(":5173") and d.find_elements("css selector", "input[name='username']"))
+        base_url = FRONTEND_URL.rstrip("/")
+        WebDriverWait(self.driver, 10).until(lambda d: d.current_url.startswith(base_url) and d.find_elements("css selector", "input[name='username']"))
         self._fixture_login("ADMIN")
         for width in (1440, 1024, 768, 390, 320):
             with self.subTest(viewport=width):
@@ -510,6 +517,16 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         counts = self.driver.execute_script("return {polls:window.__fraudLensFixture.alertRequests, status:document.body.innerText}")
         self.assertEqual(counts["polls"], 0)
         self.assertNotIn("Live WebSocket", counts["status"])
+
+    def test_fixture_authenticated_ready_ack_marks_idle_socket_live(self):
+        """Controlled protocol fixture verifies READY UI handling, not a real backend session."""
+        self._require_fixture_browser()
+        from selenium.webdriver.support.ui import WebDriverWait
+        self._fixture_login("ADMIN")
+        self.driver.get(FRONTEND_URL + "/dashboard?fixtureSocketReady=1")
+        WebDriverWait(self.driver, 10).until(lambda d: "Live WebSocket" in d.page_source)
+        self.assertEqual(len(self.driver.find_elements("css selector", ".toast")), 0)
+        self._fixture_logout()
 
     def test_fixture_alert_connection_authorized_poll_success_and_failure(self):
         """Controlled fixtures prove UI fallback states, not backend auth or socket readiness."""
