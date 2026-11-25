@@ -9,7 +9,25 @@ export default function Alerts() {
  useEffect(()=>{void load();},[load]);
  useEffect(()=>{const handleNewAlert=()=>load();window.addEventListener("fraudlens:new-alert",handleNewAlert);return()=>window.removeEventListener("fraudlens:new-alert",handleNewAlert);},[load]);
  const begin=async(row,next)=>{setNotice("");if(row.state==="RESOLVED"){setNotice("This alert has already been resolved.");return;}if(next===row.state)return;if(!((row.state==="NEW"&&(next==="UNDER_REVIEW"||next==="RESOLVED"))||(row.state==="UNDER_REVIEW"&&next==="RESOLVED"))){setNotice(`Cannot move an alert from ${row.state} to ${next}.`);return;}if(next==="RESOLVED"){setResolution("");setDialog({row,next});return;}await update(row,next);};
- const update=async(row,next,res)=>{setSaving(true);try{await request(`/api/alerts/${row.alert_id}`,{method:"PATCH",body:JSON.stringify(next==="RESOLVED"?{state:next,resolution:res}:{state:next})});setDialog(null);setNotice("Alert status updated.");await load();}catch(e){setNotice(e?.code==="CONFLICT"||e?.status===409?"This alert has already been resolved.":errorMessage(e,"Could not update the alert."));await load();}finally{setSaving(false);}};
+ const update = async (row, next, resolution) => {
+   setSaving(true);
+   try {
+     const body = next === "RESOLVED" ? { state: next, resolution } : { state: next };
+     await request(`/api/alerts/${row.alert_id}`, { method: "PATCH", body: JSON.stringify(body) });
+     setDialog(null);
+     setNotice("Alert status updated.");
+   } catch (error) {
+     if (error?.code === "CONFLICT" || error?.status === 409) {
+       setDialog(null);
+       setNotice(errorMessage(error, "Alert state changed. Review its latest status."));
+     } else {
+       setNotice(errorMessage(error, "Could not update the alert."));
+     }
+   } finally {
+     await load();
+     setSaving(false);
+   }
+ };
  if(items===null&&!error)return <Loading label="Loading alerts…"/>;
  return <div className="page-stack"><header className="page-heading"><div><span className="eyebrow">CASE REVIEW</span><h1>Fraud alerts</h1><p>Review high-risk transactions and record an outcome.</p></div></header>
  <section className="panel filter-bar"><label>Alert state<select value={state} onChange={e=>{setState(e.target.value);setPage(1);}}><option value="">All states</option><option value="NEW">NEW</option><option value="UNDER_REVIEW">UNDER REVIEW</option><option value="RESOLVED">RESOLVED</option></select></label><button className="button secondary" onClick={load}>Refresh</button></section>

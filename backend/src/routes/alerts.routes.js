@@ -141,7 +141,7 @@ router.patch(
            resolved_by = $3,
            updated_at = NOW()
        WHERE alert_id = $4
-         AND state <> 'RESOLVED'
+         AND state = $5
        RETURNING alert_id, transaction_id, risk_score, state,
                  resolution, resolved_by, created_at, updated_at`,
       [
@@ -149,11 +149,12 @@ router.patch(
         state === 'RESOLVED' ? resolution : null,
         resolvedByUserId,
         req.params.id,
+        currentState,
       ]
     );
 
     if (result.rows.length === 0) {
-      throw new AppError(409, 'CONFLICT', 'Alert was already resolved.');
+      throw new AppError(409, 'CONFLICT', 'Alert state changed. Reload it and try again.');
     }
 
     try {

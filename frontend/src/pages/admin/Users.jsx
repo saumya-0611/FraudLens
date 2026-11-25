@@ -43,8 +43,13 @@ export default function Users() {
     const create = async event => {
         event.preventDefault();
         setFormError("");
-        if (form.password.length < 10) {
-            setFormError("Password must be at least 10 characters.");
+        const password = form.password;
+        if (password.trim().length < 10) {
+            setFormError("Use at least 10 characters, excluding leading and trailing spaces.");
+            return;
+        }
+        if (new TextEncoder().encode(password).byteLength > 72) {
+            setFormError("Use a password of 72 UTF-8 bytes or fewer.");
             return;
         }
 

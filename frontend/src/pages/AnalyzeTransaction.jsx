@@ -20,81 +20,130 @@ const emptyForm = {
 };
 
 const optionalNumbers = ["lat", "lon", "merch_lat", "merch_lon", "customer_age"];
-const wait = ms => new Promise(resolve => window.setTimeout(resolve, ms));
+const statusTitles = {
+  submitting: "Submitting transaction",
+  confirming: "Confirming submission",
+  unconfirmed: "Submission unconfirmed",
+  processing: "Processing transaction",
+  pending: "Scoring still pending",
+  error: "Analysis could not be completed",
+  complete: "Analysis complete",
+};
+const idleStatus = { id: "", phase: "idle", message: "" };
+
+function waitForNextLookup(signal) {
+  return new Promise(resolve => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, 2000);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
 
 export default function AnalyzeTransaction() {
   const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
   const [form, setForm] = useState(emptyForm);
-  const [phase, setPhase] = useState("idle");
-  const [transactionId, setTransactionId] = useState("");
-  const [result, setResult] = useState(null);
-  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState(idleStatus);
+  const [storedResult, setStoredResult] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialLookup = useRef(false);
-  const submissionLock = useRef(false);
+  const transactionId = searchParams.get("transaction") || "";
+  const result = storedResult?.transaction_id === transactionId ? storedResult : null;
+  const { phase, message } = status.id === transactionId ? status : idleStatus;
+  const activeRequest = useRef(null);
+  const localSubmission = useRef(null);
+  const confirmedTransaction = useRef(null);
 
   const update = event => setForm(current => ({ ...current, [event.target.name]: event.target.value }));
 
   const findStoredResult = useCallback(async (id) => {
     if (!id) return;
-    setPhase("processing");
-    setMessage("Accepted for scoring. Waiting for the persisted transaction result…");
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const { signal } = controller;
+    const isConfirmed = () => confirmedTransaction.current === id;
+    const report = (phase, message) => setStatus({ id, phase, message });
+    report(isConfirmed() ? "processing" : "confirming", isConfirmed()
+      ? "Accepted for scoring. Waiting for the stored result."
+      : "Checking whether the backend stored this transaction ID.");
 
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (attempt > 0) await wait(2000);
-      try {
-        const detail = await request(`/api/transactions/${encodeURIComponent(id)}`);
-        if (detail.risk_category && detail.risk_category !== "PENDING" && detail.fraud_probability != null) {
-          const probability = Number(detail.fraud_probability);
-          if (!Number.isFinite(probability) || probability < 0 || probability > 1 || !["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK"].includes(detail.risk_category)) {
-            setPhase("error");
-            setMessage("The backend returned an invalid stored prediction. No score is displayed.");
+    try {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (attempt > 0) await waitForNextLookup(signal);
+        if (signal.aborted) return;
+
+        let detail;
+        try {
+          detail = await request(`/api/transactions/${encodeURIComponent(id)}`, {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+          });
+        } catch (error) {
+          if (signal.aborted) return;
+          if (error?.code !== "NOT_FOUND" && error?.code !== "BACKEND_UNAVAILABLE" && !(error?.status >= 500)) {
+            report("error", errorMessage(error, "Could not retrieve the transaction result."));
             return;
           }
-          setResult(detail);
-          setPhase("complete");
-          setMessage("Prediction loaded from the stored transaction record.");
+        }
+        if (signal.aborted) return;
+        if (detail?.transaction_id === id) {
+          confirmedTransaction.current = id;
+        }
+        if (detail?.transaction_id === id && detail.risk_category !== "PENDING" && detail.fraud_probability != null) {
+          const probability = Number(detail.fraud_probability);
+          if (!Number.isFinite(probability) || probability < 0 || probability > 1 || !["LEGITIMATE", "SUSPICIOUS", "HIGH_RISK"].includes(detail.risk_category)) {
+            report("error", "The backend returned an invalid stored prediction. No score is displayed.");
+            return;
+          }
+          setStoredResult(detail);
+          report("complete", "Prediction loaded from the stored transaction record.");
           return;
         }
-      } catch (error) {
-        if (error?.code !== "NOT_FOUND") {
-          setPhase("error");
-          setMessage(errorMessage(error, "Could not retrieve the transaction result."));
-          return;
-        }
+        report(isConfirmed() ? "processing" : "confirming", isConfirmed()
+          ? `Transaction accepted; waiting for the backend to persist a score (${attempt + 1}/30)…`
+          : `Checking for a stored transaction (${attempt + 1}/30)…`);
       }
-      setMessage(`Transaction accepted; waiting for the backend to persist a score (${attempt + 1}/30)…`);
-    }
 
-    setPhase("pending");
-    setMessage("The backend accepted this transaction, but no stored prediction is available yet. You can check again later.");
+      report(isConfirmed() ? "pending" : "unconfirmed", isConfirmed()
+        ? "The backend accepted this transaction. A stored prediction is still pending."
+        : "The backend has not confirmed this transaction. Check the same ID again before submitting another analysis.");
+    } finally {
+      if (activeRequest.current === controller) activeRequest.current = null;
+    }
   }, []);
 
-  const requestedId = searchParams.get("transaction");
   useEffect(() => {
-    if (!requestedId || initialLookup.current) return;
-    initialLookup.current = true;
-    setTransactionId(requestedId);
-    void findStoredResult(requestedId);
-  }, [requestedId, findStoredResult]);
+    if (transactionId && transactionId === localSubmission.current) return;
+    localSubmission.current = null;
+    confirmedTransaction.current = null;
+    activeRequest.current?.abort();
+    if (!transactionId) return;
+    const lookup = window.setTimeout(() => void findStoredResult(transactionId), 0);
+    return () => window.clearTimeout(lookup);
+  }, [transactionId, findStoredResult]);
+
+  useEffect(() => () => activeRequest.current?.abort(), []);
 
   function startNewAnalysis() {
+    activeRequest.current?.abort();
+    localSubmission.current = null;
+    confirmedTransaction.current = null;
     setSearchParams({});
-    setTransactionId("");
-    setResult(null);
-    setMessage("");
-    setPhase("idle");
+    setStoredResult(null);
+    setStatus(idleStatus);
     setForm({ ...emptyForm, tx_time: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) });
-    initialLookup.current = false;
   }
 
   async function submit(event) {
     event.preventDefault();
-    if (mockMode || transactionId || submissionLock.current) return;
-    submissionLock.current = true;
-    setMessage("");
-    setResult(null);
-    setPhase("submitting");
+    if (mockMode || transactionId || activeRequest.current) return;
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const { signal } = controller;
+    setStoredResult(null);
+    setStatus({ id: "", phase: "submitting", message: "" });
     let currentSubmissionId = transactionId;
 
     try {
@@ -106,8 +155,8 @@ export default function AnalyzeTransaction() {
         category: form.category.trim(),
       };
       currentSubmissionId = transaction.transaction_id;
-      setTransactionId(transaction.transaction_id);
-      initialLookup.current = true;
+      setStatus({ id: currentSubmissionId, phase: "submitting", message: "" });
+      localSubmission.current = transaction.transaction_id;
       setSearchParams({ transaction: transaction.transaction_id }, { replace: true });
       if (form.merchant.trim()) transaction.merchant = form.merchant.trim();
       for (const name of optionalNumbers) {
@@ -117,22 +166,23 @@ export default function AnalyzeTransaction() {
       const accepted = await request("/api/transactions", {
         method: "POST",
         body: JSON.stringify(transaction),
+        expectedStatus: 202,
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
       });
-      if (accepted?.status !== "ACCEPTED" || accepted.transaction_id !== currentSubmissionId) {
-        throw { code: "INVALID_RESPONSE", message: "The ingestion API returned an unexpected acceptance response." };
+      if (signal.aborted) return;
+      if (accepted?.status === "ACCEPTED" && accepted.transaction_id === currentSubmissionId) {
+        confirmedTransaction.current = currentSubmissionId;
       }
-      await findStoredResult(accepted.transaction_id);
+      await findStoredResult(currentSubmissionId);
     } catch (error) {
-      if (error?.code === "BACKEND_UNAVAILABLE" && currentSubmissionId) {
-        setPhase("pending");
-        setMessage("The connection failed before acceptance could be confirmed. Checking this transaction ID; do not submit it again.");
-        void findStoredResult(currentSubmissionId);
+      if (signal.aborted) return;
+      if (currentSubmissionId && (["BACKEND_UNAVAILABLE", "UNEXPECTED_STATUS"].includes(error?.code) || error?.status >= 500)) {
+        await findStoredResult(currentSubmissionId);
         return;
       }
-      setPhase("error");
-      setMessage(errorMessage(error, "Transaction submission failed."));
+      setStatus({ id: currentSubmissionId, phase: "error", message: errorMessage(error, "Transaction submission failed.") });
     } finally {
-      submissionLock.current = false;
+      if (activeRequest.current === controller) activeRequest.current = null;
     }
   }
 
@@ -164,8 +214,18 @@ export default function AnalyzeTransaction() {
       </section>
 
       {message && <section className={`panel analysis-status ${phase}`} role={phase === "error" ? "alert" : "status"} aria-live="polite">
-        {phase === "complete" ? <CheckCircle2 size={19} /> : phase === "submitting" || phase === "processing" ? <LoaderCircle className="analysis-spin" size={19} /> : <AlertTriangle size={19} />}
-        <div><strong>{phase === "complete" ? "Analysis complete" : phase === "pending" ? "Scoring still pending" : phase === "error" ? "Analysis could not be completed" : "Processing transaction"}</strong><p>{message}</p>{transactionId && <small>Transaction ID: {transactionId}</small>}{phase === "pending" && <button className="button secondary" type="button" onClick={() => void findStoredResult(transactionId)}>Check again</button>}{["pending", "complete", "error"].includes(phase) && <button className="button secondary" type="button" onClick={startNewAnalysis}>Start another analysis</button>}</div>
+        {phase === "complete" ? <CheckCircle2 size={19} /> : ["submitting", "confirming", "processing"].includes(phase) ? <LoaderCircle className="analysis-spin" size={19} /> : <AlertTriangle size={19} />}
+        <div>
+          <strong>{statusTitles[phase]}</strong>
+          <p>{message}</p>
+          {transactionId && <small>Transaction ID: {transactionId}</small>}
+          {["pending", "unconfirmed"].includes(phase) && (
+            <button className="button secondary" type="button" onClick={() => void findStoredResult(transactionId)}>Check again</button>
+          )}
+          {["pending", "unconfirmed", "complete", "error"].includes(phase) && (
+            <button className="button secondary" type="button" onClick={startNewAnalysis}>Start another analysis</button>
+          )}
+        </div>
       </section>}
 
       {result && <section className="panel analysis-result">

@@ -114,7 +114,10 @@ describe('WebSocket Alert Socket Tests', () => {
 
   test('an approved origin still requires a valid JWT', async () => {
     const client = connect({ origin: localOrigin, headers: { cookie: 'fl_token=invalid' } });
+    const received = jest.fn();
+    client.on('message', received);
     expect((await once(client, 'close'))[0]).toBe(4401);
+    expect(received).not.toHaveBeenCalled();
   });
 
   test('an approved origin still requires an active account', async () => {

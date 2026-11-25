@@ -86,7 +86,7 @@ router.get(
          t.tx_time,
          COALESCE(fr.risk_category, 'PENDING') AS risk_category,
          fr.fraud_probability,
-         COALESCE(fr.is_anomaly, false) AS is_anomaly,
+         fr.is_anomaly,
          fr.model_version,
          a.alert_id,
          a.state AS alert_state,

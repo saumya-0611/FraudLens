@@ -60,10 +60,12 @@ CONTROLLED_FIXTURE = r"""
   const state = window.__fraudLensFixture = {
     role: sessionStorage.getItem('fraudlens-fixture-role'),
     transaction: JSON.parse(sessionStorage.getItem('fraudlens-fixture-transaction') || 'null'),
-    detailReads: 0, transactionPosts: 0, alertRequests: 0,
+    detailReads: 0, detailAttempts: 0, transactionPosts: 0, alertRequests: 0,
+    postConnectionLost: new URLSearchParams(location.search).get('fixturePostConnectionLost') || '',
     alertFailure: new URLSearchParams(location.search).get('fixtureAlertFailure') === '1',
     alertConflict: new URLSearchParams(location.search).get('fixtureAlertConflict') === '1',
     socketFailures: Number(new URLSearchParams(location.search).get('fixtureSocketFailures') || 0),
+    socketReady: new URLSearchParams(location.search).get('fixtureSocketReady') === '1',
     alwaysPending: new URLSearchParams(location.search).get('fixtureAlwaysPending') === '1', sockets: [],
     transactionRows, transactionQueries: [], alerts: fixtureAlerts, alertPatches: [],
     users: [{ id: 10, username: 'fixture-analyst', role: 'ANALYST', status: 'ACTIVE', created_at: '2026-11-20T12:00:00.000Z' }], userPatches: [], userCreates: [],
@@ -101,10 +103,17 @@ CONTROLLED_FIXTURE = r"""
     if (url.pathname === '/api/auth/logout') { state.role = null; sessionStorage.removeItem('fraudlens-fixture-role'); return response(null, 204); }
     if (url.pathname === '/api/transactions' && method === 'POST') {
       state.transactionPosts += 1;
+      if (state.postConnectionLost === 'unsaved') throw new TypeError('Fixture connection lost');
+      if (state.postConnectionLost === 'unexpectedStatus') {
+        const requested = JSON.parse(init.body || '{}');
+        return response({ transaction_id: requested.transaction_id, status: 'ACCEPTED' });
+      }
       state.transaction = JSON.parse(init.body || '{}'); sessionStorage.setItem('fraudlens-fixture-transaction', JSON.stringify(state.transaction)); state.detailReads = 0;
+      if (state.postConnectionLost === 'saved') throw new TypeError('Fixture connection lost');
       return response({ transaction_id: state.transaction.transaction_id, status: 'ACCEPTED' }, 202);
     }
     if (url.pathname.startsWith('/api/transactions/')) {
+      state.detailAttempts += 1;
       const id = decodeURIComponent(url.pathname.split('/').pop());
       if (state.transaction && state.transaction.transaction_id === id) {
         state.detailReads += 1;
@@ -144,7 +153,11 @@ CONTROLLED_FIXTURE = r"""
       const alert = state.alerts.find(item => String(item.alert_id) === decodeURIComponent(url.pathname.split('/').pop()));
       const body = JSON.parse(init.body || '{}');
       state.alertPatches.push({ alert_id: alert?.alert_id, ...body });
-      if (state.alertConflict || !alert || alert.state === 'RESOLVED') return response({ error: { code: 'CONFLICT', message: 'This alert has already been resolved.' } }, 409);
+      if (state.alertConflict && alert) {
+        alert.state = 'UNDER_REVIEW';
+        return response({ error: { code: 'CONFLICT', message: 'Alert state changed. Reload it and try again.' } }, 409);
+      }
+      if (!alert || alert.state === 'RESOLVED') return response({ error: { code: 'CONFLICT', message: 'This alert has already been resolved.' } }, 409);
       Object.assign(alert, body);
       return response(alert);
     }
@@ -215,7 +228,7 @@ CONTROLLED_FIXTURE = r"""
       setTimeout(() => {
         if (state.socketFailures > 0) { state.socketFailures -= 1; this.readyState = 3; this.onclose?.({ code: 1006 }); return; }
         this.readyState = 1; this.onopen?.();
-        if (new URL(location.href).searchParams.get('fixtureSocketReady') === '1') {
+        if (state.socketReady) {
           this.onmessage?.({ data: JSON.stringify({ type: 'READY' }) });
         }
       }, 0);
@@ -421,6 +434,37 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.assertNotIn("Fraud probability", self.driver.page_source)
         self.assertFalse(self.driver.find_element("css selector", ".analysis-form button[type='submit']").is_enabled())
 
+    def test_fixture_manual_transaction_connection_loss_keeps_acceptance_unconfirmed(self):
+        self._require_fixture_browser()
+        self._fixture_login("ADMIN")
+        from selenium.webdriver.support.ui import WebDriverWait
+        for mode in ("unsaved", "unexpectedStatus"):
+            with self.subTest(mode=mode):
+                self.driver.get(FRONTEND_URL + "/analyse?fixturePostConnectionLost=" + mode)
+                self.driver.find_element("name", "account_ref").send_keys("fixture-account-4242")
+                self.driver.find_element("name", "amount").send_keys("120.50")
+                self.driver.find_element("name", "category").send_keys("shopping_net")
+                self.driver.execute_script("const original=window.setTimeout.bind(window); window.setTimeout=(fn,ms,...args)=>original(fn,ms===2000?1:ms,...args)")
+                self._click_visible(".analysis-form button[type='submit']")
+                WebDriverWait(self.driver, 10).until(lambda d: "Submission unconfirmed" in d.page_source)
+                self.assertNotIn("Transaction accepted", self.driver.page_source)
+                self.assertNotIn("Scoring still pending", self.driver.page_source)
+                self.assertIn("Check again", self.driver.page_source)
+                result = self.driver.execute_script("const s=window.__fraudLensFixture; return {posts:s.transactionPosts, lookups:s.detailAttempts}")
+                self.assertEqual(result, {"posts": 1, "lookups": 30})
+
+    def test_fixture_manual_transaction_connection_loss_recovers_stored_transaction(self):
+        self._require_fixture_browser()
+        self._fixture_login("ADMIN")
+        self.driver.get(FRONTEND_URL + "/analyse?fixturePostConnectionLost=saved")
+        self.driver.find_element("name", "account_ref").send_keys("fixture-account-4242")
+        self.driver.find_element("name", "amount").send_keys("120.50")
+        self.driver.find_element("name", "category").send_keys("shopping_net")
+        self._click_visible(".analysis-form button[type='submit']")
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 10).until(lambda d: "Prediction result" in d.page_source)
+        self.assertEqual(self.driver.execute_script("return window.__fraudLensFixture.transactionPosts"), 1)
+
     def test_fixture_manual_transaction_analyst_and_viewer_denied(self):
         """Controlled role fixture confirms client route/menu restrictions only."""
         self._require_fixture_browser()
@@ -537,11 +581,13 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         self.driver.get(FRONTEND_URL + "/dashboard?fixtureSocketFailures=2")
         WebDriverWait(self.driver, 12).until(lambda d: "HTTP polling" in d.page_source)
         self.assertGreater(self.driver.execute_script("return window.__fraudLensFixture.alertRequests"), 0)
+        self.driver.execute_script("window.__fraudLensFixture.socketReady = true")
+        WebDriverWait(self.driver, 12).until(lambda d: "Live WebSocket" in d.page_source)
 
         self._fixture_logout()
         self._fixture_login("ANALYST")
         self.driver.get(FRONTEND_URL + "/dashboard?fixtureSocketFailures=2&fixtureAlertFailure=1")
-        WebDriverWait(self.driver, 12).until(lambda d: "Unavailable" in d.page_source)
+        WebDriverWait(self.driver, 12).until(lambda d: d.execute_script("return window.__fraudLensFixture.sockets.length >= 2") and "Unavailable" in d.page_source)
         self.assertGreater(self.driver.execute_script("return window.__fraudLensFixture.alertRequests"), 0)
 
     def test_fixture_alert_connection_logout_cleans_up_socket_and_role_scope(self):
@@ -643,7 +689,9 @@ class FraudLensSeleniumE2ETests(unittest.TestCase):
         Select(self.driver.find_element("id", "alert-301")).select_by_value("RESOLVED")
         Select(WebDriverWait(self.driver, 5).until(lambda d: d.find_element("css selector", "[role='dialog'] select"))).select_by_value("FALSE_POSITIVE")
         self._click_visible("//section[@role='dialog']//button[contains(., 'Resolve alert')]")
-        WebDriverWait(self.driver, 10).until(lambda d: "already been resolved" in d.page_source)
+        WebDriverWait(self.driver, 10).until(lambda d: "Alert state changed." in d.page_source)
+        self.assertEqual(Select(self.driver.find_element("id", "alert-301")).first_selected_option.get_attribute("value"), "UNDER_REVIEW")
+        self.assertFalse(self.driver.find_elements("css selector", "[role='dialog']"))
 
     def test_fixture_admin_user_creation_role_and_status_management(self):
         """Controlled admin API fixtures exercise CRUD UI without persisting an account."""

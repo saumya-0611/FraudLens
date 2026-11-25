@@ -18,11 +18,15 @@ export function useAlertSocket({ enabled, role, onAlert }) {
 
     let socket;
     let reconnectTimer;
+    let readyTimer;
     let pollTimer;
+    let pollRequest;
+    let polling = false;
     let delay = 1000;
     let wsFailures = 0;
     let closed = false;
     let pollingPrimed = false;
+    const lifecycle = new AbortController();
     const effectToastTimers = toastTimers.current;
     const canPollAlerts = role === "ADMIN" || role === "ANALYST";
     const setStatus = value => setConnection({ scope: toastScope, status: value });
@@ -49,12 +53,17 @@ export function useAlertSocket({ enabled, role, onAlert }) {
     };
 
     const pollOnce = async () => {
-      if (closed) return;
+      if (!polling) return;
+      const controller = new AbortController();
+      pollRequest = controller;
       try {
-        const data = await request("/api/alerts?page=1&page_size=5");
-        if (closed) return;
+        const data = await request("/api/alerts?page=1&page_size=5", {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+        });
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(data?.items)) throw new Error("Unexpected alert response");
         setStatus("HTTP polling");
-        const items = Array.isArray(data?.items) ? data.items : [];
+        const { items } = data;
         if (!pollingPrimed) {
           items.forEach(item => {
             const id = String(item.alert_id ?? item.transaction_id ?? "");
@@ -64,84 +73,103 @@ export function useAlertSocket({ enabled, role, onAlert }) {
           return;
         }
         items.slice().reverse().forEach(emitAlertToast);
-      } catch {
-        if (!closed) setStatus("Unavailable");
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setStatus("Unavailable");
+        if (error?.status === 403) stopPolling();
+      } finally {
+        if (pollRequest === controller) {
+          pollRequest = null;
+          if (polling) pollTimer = window.setTimeout(pollOnce, 5000);
+        }
       }
     };
 
     const startPollingFallback = () => {
-      if (closed || pollTimer) return;
-      if (!canPollAlerts) {
-        setStatus("Unavailable");
-        return;
-      }
+      if (closed || polling || !canPollAlerts) return;
+      polling = true;
       void pollOnce();
-      pollTimer = window.setInterval(() => void pollOnce(), 5000);
     };
+
+    function stopPolling() {
+      polling = false;
+      window.clearTimeout(pollTimer);
+      pollRequest?.abort();
+      pollRequest = null;
+    }
 
     const connect = async () => {
       if (closed) return;
-      // Confirm the cookie session before opening the socket. Viewers use this
-      // permitted endpoint and never call the ADMIN/ANALYST-only alerts API.
+      if (!polling) setStatus("Connecting");
       try {
-        await request("/api/auth/me");
-      } catch {
-        if (!closed) setStatus("Unavailable");
+        const session = await request("/api/auth/me", {
+          signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(5000)]),
+        });
+        if (closed) return;
+        if (session?.role !== role) {
+          stopPolling();
+          setStatus("Unavailable");
+          return;
+        }
+      } catch (error) {
+        if (closed) return;
+        if (error?.code === "UNAUTHENTICATED" || error?.code === "UNAUTHORIZED") {
+          stopPolling();
+          setStatus("Unavailable");
+        } else {
+          onSocketFailure();
+        }
         return;
       }
-      if (closed) return;
-      setStatus("Connecting");
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      let client;
       try {
-        socket = new WebSocket(`${protocol}//${window.location.host}/ws/alerts`);
+        client = new WebSocket(`${protocol}//${window.location.host}/ws/alerts`);
+        socket = client;
       } catch {
         onSocketFailure();
         return;
       }
-      socket.onopen = () => {
-        // The backend has no authenticated-ready acknowledgement. Keep the UI
-        // at Connecting until an authenticated server event proves the channel.
-      };
-      socket.onmessage = event => {
+      readyTimer = window.setTimeout(() => client.close(), 8000);
+      client.onmessage = event => {
+        if (closed || socket !== client) return;
         try {
           const message = JSON.parse(event.data);
-          if (message.type === "READY") {
-            wsFailures = 0;
-            delay = 1000;
-            setStatus("Live WebSocket");
-            return;
-          }
-          if (message.type !== "NEW_ALERT" || !message.alert) return;
+          const receivedAlert = message?.type === "NEW_ALERT" && message.alert;
+          if (message?.type !== "READY" && !receivedAlert) return;
+          window.clearTimeout(readyTimer);
+          stopPolling();
           wsFailures = 0;
           delay = 1000;
           setStatus("Live WebSocket");
-          emitAlertToast(message.alert);
+          if (receivedAlert) emitAlertToast(message.alert);
         } catch { /* Ignore malformed server frames. */ }
       };
-      socket.onerror = () => socket.close();
-      socket.onclose = onSocketFailure;
+      client.onerror = () => client.close();
+      client.onclose = () => {
+        if (socket !== client) return;
+        socket = null;
+        window.clearTimeout(readyTimer);
+        onSocketFailure();
+      };
     };
 
     function onSocketFailure() {
       if (closed) return;
+      if (!polling) setStatus("Unavailable");
       wsFailures += 1;
-      if (wsFailures >= 2 && canPollAlerts) {
-        startPollingFallback();
-        return;
-      }
-      setStatus("Unavailable");
-      reconnectTimer = window.setTimeout(() => {
-        setStatus("Connecting");
-        void connect();
-      }, delay);
+      if (wsFailures >= 2) startPollingFallback();
+      reconnectTimer = window.setTimeout(connect, delay);
       delay = Math.min(delay * 2, 30000);
     }
 
     void connect();
     return () => {
       closed = true;
+      lifecycle.abort();
       window.clearTimeout(reconnectTimer);
-      window.clearInterval(pollTimer);
+      window.clearTimeout(readyTimer);
+      stopPolling();
       effectToastTimers.forEach(window.clearTimeout);
       effectToastTimers.clear();
       socket?.close();

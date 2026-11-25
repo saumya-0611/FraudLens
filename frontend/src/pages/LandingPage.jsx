@@ -50,7 +50,7 @@ export default function LandingPage() {
             <Link className="landing-primary" to="/">Get started <ArrowRight size={17} /></Link>
             <a className="landing-secondary" href="#how-it-works">Explore how it works</a>
           </div>
-        <div className="landing-proof"><span><ShieldCheck size={16} /> Role-aware access</span><span><Activity size={16} /> Model-assisted review</span></div>
+          <div className="landing-proof"><span><ShieldCheck size={16} /> Role-aware access</span><span><Activity size={16} /> Model-assisted review</span></div>
         </div>
 
         <div className="landing-visual" aria-label="Illustration of a transaction moving through fraud review" role="img">
@@ -72,11 +72,10 @@ export default function LandingPage() {
       </section>
 
       <section className="landing-section landing-container" id="how-it-works">
-        <div className="landing-section-heading"><span className="landing-kicker">PROCESSING MODES</span><h2>How FraudLens works</h2><p>The project supports two processing paths. They are alternatives, not consecutive stages.</p></div>
+        <div className="landing-section-heading"><span className="landing-kicker">PROCESSING MODES</span><h2>How FraudLens works</h2><p>Each deployment configures its transaction processing mode.</p></div>
         <div className="processing-modes">
           {processingModes.map(mode => <article className="processing-mode panel" key={mode.title}><div><h3>{mode.title}</h3><p>{mode.label}</p></div><ol>{mode.steps.map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}</ol></article>)}
         </div>
-        <p className="pipeline-evidence-note">The Render blueprint selects inline mode. The presence of streaming code does not mean Kafka/Spark or a public deployment is currently running.</p>
       </section>
 
       <section className="landing-capabilities">
@@ -87,7 +86,7 @@ export default function LandingPage() {
       </section>
 
       <section className="landing-section landing-container landing-technology" id="technology">
-        <div><span className="landing-kicker">IMPLEMENTED STACK</span><h2>Built on a streaming architecture</h2><p>FraudLens connects a web dashboard to backend services, event streaming, model inference, and persistent operational data.</p></div>
+        <div><span className="landing-kicker">IMPLEMENTED STACK</span><h2>Technology</h2><p>FraudLens connects a web dashboard to transaction scoring, alert review, and persistent operational data.</p></div>
         <ul className="technology-list">{technologies.map(technology => <li key={technology}>{technology}</li>)}</ul>
       </section>
 

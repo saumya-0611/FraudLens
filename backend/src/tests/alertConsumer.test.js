@@ -20,8 +20,13 @@ jest.mock('kafkajs', () => {
 });
 
 jest.mock('../audit/auditLogger', () => ({
-  audit: jest.fn().mockResolvedValue(undefined),
+  appendAudit: jest.fn().mockResolvedValue(undefined),
 }));
+
+jest.mock('../config/db', () => {
+  const client = { query: jest.fn() };
+  return { withTransaction: jest.fn((work) => work(client)), __mockClient: client };
+});
 
 jest.mock('../websocket/alertSocket', () => {
   const actualSocket = jest.requireActual('../websocket/alertSocket');
@@ -33,7 +38,8 @@ jest.mock('../websocket/alertSocket', () => {
 });
 
 const { __mockConsumer } = require('kafkajs');
-const { audit } = require('../audit/auditLogger');
+const { appendAudit: audit } = require('../audit/auditLogger');
+const { __mockClient } = require('../config/db');
 const { broadcastAlert } = require('../websocket/alertSocket');
 const {
   startAlertConsumer,
@@ -47,6 +53,7 @@ describe('Kafka Alert Consumer Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resetDeduplicationCache();
+    __mockClient.query.mockReset().mockResolvedValue({ rows: [] });
   });
 
   afterEach(async () => {
@@ -59,7 +66,7 @@ describe('Kafka Alert Consumer Tests', () => {
     expect(__mockConsumer.connect).toHaveBeenCalled();
     expect(__mockConsumer.subscribe).toHaveBeenCalledWith({
       topic: 'fraud-alerts',
-      fromBeginning: false,
+      fromBeginning: true,
     });
     expect(__mockConsumer.run).toHaveBeenCalled();
   });
@@ -85,7 +92,7 @@ describe('Kafka Alert Consumer Tests', () => {
     expect(result.alert_id).toBe(101);
 
     // Verify audit call with contract-specified fields
-    expect(audit).toHaveBeenCalledWith({
+    expect(audit).toHaveBeenCalledWith(__mockClient, {
       userId: null,
       username: 'system',
       action: 'ALERT_RAISED',
@@ -206,6 +213,22 @@ describe('Kafka Alert Consumer Tests', () => {
     expect(secondResult).toBeNull(); // Deduplicated
     expect(audit).toHaveBeenCalledTimes(1);
     expect(broadcastAlert).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves a committed audit row on replay after process restart', async () => {
+    __mockClient.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ '?column?': 1 }] });
+    const alert = { alert_id: 107, transaction_id: 'tx-consumer-107' };
+
+    await handleAlertMessage(JSON.stringify(alert));
+
+    expect(__mockClient.query).toHaveBeenNthCalledWith(
+      1, expect.stringContaining('pg_advisory_xact_lock'), [107]
+    );
+    expect(__mockClient.query).toHaveBeenNthCalledWith(
+      2, expect.stringContaining("action = 'ALERT_RAISED'"), ['107']
+    );
+    expect(audit).not.toHaveBeenCalled();
+    expect(broadcastAlert).toHaveBeenCalledWith(expect.objectContaining(alert));
   });
 
   test('handles broadcast failure non-fatally without crashing or failing consumer', async () => {
