@@ -316,5 +316,32 @@ describe('Dashboard Route Tests', () => {
         [15]
       );
     });
+
+    test('7. aggregates by hour when minutes exceeds 180', async () => {
+      query.mockResolvedValueOnce({
+        rows: [
+          {
+            minute: '2026-11-25T12:00:00.000Z',
+            total: 40,
+            flagged: 6,
+          },
+        ],
+      });
+
+      const response = await request(app).get('/api/dashboard/trends?minutes=1440').set('Cookie', cookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.points).toEqual([
+        {
+          minute: '2026-11-25T12:00:00.000Z',
+          total: 40,
+          flagged: 6,
+        },
+      ]);
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining("date_trunc('hour'"),
+        [1440]
+      );
+    });
   });
 });

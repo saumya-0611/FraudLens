@@ -21,12 +21,69 @@ const latencyMetrics = [
   ["Scoring p95", "score_p95"],
   ["Alert p95", "alert_p95"],
 ];
+const TREND_RANGES = [
+  { key: "60m", label: "60m", minutes: 60, stepMs: 60 * 1000, subtitle: "Per-minute volume over the last 60 minutes" },
+  { key: "24h", label: "24h", minutes: 1440, stepMs: 60 * 60 * 1000, subtitle: "Hourly volume over the last 24 hours" },
+  { key: "7d", label: "7d", minutes: 10080, stepMs: 60 * 60 * 1000, subtitle: "Hourly volume over the last 7 days" },
+];
 
-function formatTrendMinute(value) {
+function formatTrendTick(value, rangeKey) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (Number.isNaN(date.getTime())) return value;
+  if (rangeKey === "7d") {
+    return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit" });
+  }
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatTrendTooltipLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function normalizeTrendSeries(points, range) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (!points.every(point => !Number.isNaN(Date.parse(point.minute)))) {
+    return points;
+  }
+
+  const { stepMs, minutes } = range;
+  const byBucket = new Map();
+  let minBucket = Infinity;
+  let maxBucket = -Infinity;
+
+  for (const point of points) {
+    const bucketMs = Math.floor(Date.parse(point.minute) / stepMs) * stepMs;
+    const prev = byBucket.get(bucketMs) || { total: 0, flagged: 0 };
+    byBucket.set(bucketMs, {
+      total: prev.total + Number(point.total || 0),
+      flagged: prev.flagged + Number(point.flagged || 0),
+    });
+    if (bucketMs < minBucket) minBucket = bucketMs;
+    if (bucketMs > maxBucket) maxBucket = bucketMs;
+  }
+
+  const nowBucket = Math.floor(Date.now() / stepMs) * stepMs;
+  const endBucket = Math.max(nowBucket, maxBucket);
+  const bucketCount = Math.max(2, Math.round((minutes * 60 * 1000) / stepMs));
+  const startBucket = Math.min(endBucket - (bucketCount - 1) * stepMs, minBucket);
+
+  const filled = [];
+  for (let ts = startBucket; ts <= endBucket; ts += stepMs) {
+    const entry = byBucket.get(ts);
+    filled.push({
+      minute: new Date(ts).toISOString(),
+      total: entry ? entry.total : 0,
+      flagged: entry ? entry.flagged : 0,
+    });
+  }
+  return filled;
 }
 
 function formatMetric(value) {
@@ -44,10 +101,13 @@ export default function Dashboard() {
   const mockMode = import.meta.env.VITE_USE_MOCKS === "true";
   const [summary, setSummary] = useState(null);
   const [trends, setTrends] = useState([]);
+  const [trendRangeKey, setTrendRangeKey] = useState("60m");
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState("");
   const { user } = useAuth();
   const navigate = useNavigate();
+
+  const activeRange = TREND_RANGES.find(item => item.key === trendRangeKey) || TREND_RANGES[0];
 
   const refresh = useCallback(async () => {
     try {
@@ -67,17 +127,17 @@ export default function Dashboard() {
 
       const [summaryResult, trendResult, alertItems] = await Promise.all([
         request("/api/dashboard/summary"),
-        request("/api/dashboard/trends?minutes=60"),
+        request(`/api/dashboard/trends?minutes=${activeRange.minutes}`),
         alertRequest,
       ]);
       setSummary(summaryResult);
-      setTrends(trendResult.points || []);
+      setTrends(normalizeTrendSeries(trendResult.points || [], activeRange));
       setAlerts(alertItems);
       setError("");
     } catch (requestError) {
       setError(errorMessage(requestError, "Could not load dashboard data."));
     }
-  }, [user]);
+  }, [user, activeRange]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void refresh(), 0);
@@ -160,30 +220,99 @@ export default function Dashboard() {
         <div className="section-heading">
           <div>
             <h2>Transaction trend</h2>
-            <p>Per-minute volume over the last 60 minutes</p>
+            <p>{activeRange.subtitle}</p>
           </div>
-          <span className="chart-legend"><i /> Total <i className="flagged-dot" /> Flagged</span>
+          <div className="chart-controls">
+            <div className="chart-range-group" role="group" aria-label="Trend time range">
+              {TREND_RANGES.map(range => (
+                <button
+                  key={range.key}
+                  type="button"
+                  className={`chart-range-btn${range.key === activeRange.key ? " active" : ""}`}
+                  aria-pressed={range.key === activeRange.key}
+                  onClick={() => setTrendRangeKey(range.key)}
+                >
+                  {range.label}
+                </button>
+              ))}
+            </div>
+            <span className="chart-legend"><i /> Total <i className="flagged-dot" /> Flagged</span>
+          </div>
         </div>
         {trends.length ? (
           <div className="chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trends}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
+              <AreaChart data={trends} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="totalFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--brand-primary)" stopOpacity={0.26} />
+                    <stop offset="0%" stopColor="var(--brand-primary)" stopOpacity={0.28} />
                     <stop offset="95%" stopColor="var(--brand-primary)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="flaggedFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--accent-danger)" stopOpacity={0.24} />
+                    <stop offset="95%" stopColor="var(--accent-danger)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="var(--border-default)" strokeDasharray="4 4" />
-                <XAxis dataKey="minute" tickFormatter={formatTrendMinute} minTickGap={28} stroke="var(--text-muted)" tick={{ fontSize: 11 }} />
-                <YAxis width={38} stroke="var(--text-muted)" tick={{ fontSize: 11 }} />
-                <Tooltip contentStyle={{ background: "var(--bg-elevated)", border: "1px solid var(--border-default)", borderRadius: 8, color: "var(--text-primary)" }} />
-                <Area type="monotone" dataKey="total" name="Total" stroke="var(--brand-primary)" fill="url(#totalFill)" />
-                <Area type="monotone" dataKey="flagged" name="Flagged" stroke="var(--accent-danger)" fill="none" />
+                <XAxis
+                  dataKey="minute"
+                  tickFormatter={value => formatTrendTick(value, activeRange.key)}
+                  minTickGap={32}
+                  stroke="var(--text-muted)"
+                  tick={{ fontSize: 11 }}
+                />
+                <YAxis
+                  width={38}
+                  allowDecimals={false}
+                  stroke="var(--text-muted)"
+                  tick={{ fontSize: 11 }}
+                />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  contentStyle={{
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-default)",
+                    borderRadius: 8,
+                    color: "var(--text-primary)",
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  name="Total"
+                  stroke="var(--brand-primary)"
+                  strokeWidth={2}
+                  fill="url(#totalFill)"
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="flagged"
+                  name="Flagged"
+                  stroke="var(--accent-danger)"
+                  strokeWidth={2}
+                  fill="url(#flaggedFill)"
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        ) : <Empty>No trend points are available yet.</Empty>}
+        ) : (
+          <Empty>
+            <div>No trend points in the last {activeRange.label}.</div>
+            {Number(summary.total_transactions) > 0 && activeRange.key !== "7d" && (
+              <div className="chart-empty-action">
+                <button type="button" className="button secondary small" onClick={() => setTrendRangeKey("7d")}>
+                  Show last 7 days
+                </button>
+              </div>
+            )}
+          </Empty>
+        )}
       </section>
 
       <section className="lower-grid">

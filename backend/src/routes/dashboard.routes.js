@@ -176,16 +176,18 @@ router.get(
       minutes = parsed;
     }
 
+    const bucketUnit = minutes > 180 ? 'hour' : 'minute';
+
     const trendsSql = `
       SELECT
-        date_trunc('minute', t.tx_time) AS minute,
+        date_trunc('${bucketUnit}', t.tx_time) AS minute,
         COUNT(t.transaction_id)::int AS total,
         COUNT(*) FILTER (WHERE fr.risk_category IN ('SUSPICIOUS', 'HIGH_RISK') OR fr.is_anomaly = true)::int AS flagged
       FROM transactions t
       LEFT JOIN fraud_results fr
         ON fr.transaction_id = t.transaction_id
       WHERE t.tx_time >= (NOW() - ($1 * INTERVAL '1 minute'))
-      GROUP BY date_trunc('minute', t.tx_time)
+      GROUP BY date_trunc('${bucketUnit}', t.tx_time)
       ORDER BY minute ASC;
     `;
 
